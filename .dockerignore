@@ -1,0 +1,11 @@
+.git
+.env
+.codex-state
+data
+runner/node_modules
+runner/dist
+node_modules
+__pycache__
+.pytest_cache
+*.pyc
+
