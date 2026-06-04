@@ -70,6 +70,7 @@ class GrokXSkill:
                 )
                 response.raise_for_status()
                 data = response.json()
+                logger.info("grok x search response received sector=%s", sector_query)
         except Exception as error:
             logger.warning("grok x search failed: %s", error)
             return GrokNarrative(
@@ -81,8 +82,11 @@ class GrokXSkill:
             )
 
         text = _extract_output_text(data)
+        logger.info("grok output text extracted sector=%s chars=%d", sector_query, len(text))
         parsed = _parse_json_object(text)
+        logger.info("grok output parsed sector=%s parsed=%s", sector_query, bool(parsed))
         citations = _extract_citations(data)
+        logger.info("grok citations extracted sector=%s citations=%d", sector_query, len(citations))
         tickers = parsed.get("tickers_discussed") if isinstance(parsed, dict) else None
         hype = parsed.get("hype_score_by_symbol") if isinstance(parsed, dict) else None
         summary = parsed.get("summary") if isinstance(parsed, dict) else None
@@ -92,7 +96,7 @@ class GrokXSkill:
             model=self.model,
             query_window=f"{from_date}..{to_date}",
             summary=str(summary or text[:1200]),
-            raw_text=text,
+            raw_text=text[:5000],
             citations=citations,
             tickers_discussed=[str(item).upper().removeprefix("$") for item in tickers] if isinstance(tickers, list) else top_symbols,
             hype_score_by_symbol=_normalize_hype(hype),
@@ -154,8 +158,14 @@ def _extract_output_text(data: dict[str, Any]) -> str:
 
 def _extract_citations(data: Any) -> list[str]:
     found: list[str] = []
+    visited = 0
+    max_nodes = 2000
 
     def visit(value: Any) -> None:
+        nonlocal visited
+        visited += 1
+        if visited > max_nodes:
+            return
         if isinstance(value, dict):
             url = value.get("url") or value.get("uri")
             if isinstance(url, str) and url.startswith("http"):

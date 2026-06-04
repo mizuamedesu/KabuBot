@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from .charts import ChartRenderer
 from .codex_client import CodexClient
 from .config import Settings
 from .grok_x_skill import GrokXSkill
@@ -15,6 +17,9 @@ from .watch import WatchStore
 from .yfinance_skill import YFinanceSkill
 
 logger = logging.getLogger(__name__)
+
+EXTREME_ONE_DAY_DROP_EXCLUSION_PCT = -40.0
+REPORT_SIGNAL_LIMIT = 10
 
 
 class Scanner:
@@ -37,6 +42,7 @@ class Scanner:
         )
         self.store = ReportStore(settings.data_dir)
         self.watch = WatchStore(settings.data_dir, settings.sector_query, [])
+        self.charts = ChartRenderer(settings.data_dir)
 
     async def scan(
         self,
@@ -59,17 +65,35 @@ class Scanner:
         else:
             seed_symbols = watch_state.symbols if watch_state.symbol_mode == "augment" else []
             price_signals, yf_warnings = self.yfinance.scan_sector(sector, seed_symbols, limit)
+        logger.info("yfinance complete sector=%s candidates=%d warnings=%d", sector, len(price_signals), len(yf_warnings))
 
         scored = enrich_anomaly_scores(price_signals)
-        top_for_x = scored[: min(15, len(scored))]
+        search_candidates, extreme_excluded = _exclude_extreme_one_day_drops(scored)
+        logger.info(
+            "ml scoring complete sector=%s candidates=%d extreme_excluded=%d",
+            sector,
+            len(search_candidates),
+            len(extreme_excluded),
+        )
+        top_for_x = search_candidates[:REPORT_SIGNAL_LIMIT]
+        logger.info("x search candidates ready sector=%s top_for_x=%d", sector, len(top_for_x))
         x_narrative = await self.grok.analyze(sector, top_for_x)
-        boosted = _apply_social_boost(scored, x_narrative)[:limit]
+        logger.info(
+            "grok complete sector=%s enabled=%s citations=%d warnings=%d",
+            sector,
+            x_narrative.enabled,
+            len(x_narrative.citations),
+            len(x_narrative.warnings),
+        )
+        boosted = _apply_social_boost(search_candidates, x_narrative)[:limit]
+        logger.info("codex summary start sector=%s boosted=%d", sector, len(boosted))
         summary, generated_by_codex = await self.codex.summarize(
             sector,
-            boosted[:12],
+            boosted[:REPORT_SIGNAL_LIMIT],
             x_narrative,
             self.settings.report_language,
         )
+        logger.info("codex summary complete sector=%s generated=%s", sector, generated_by_codex)
 
         report = ScanReport(
             id=f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}",
@@ -77,21 +101,31 @@ class Scanner:
             sector_query=sector,
             symbols_requested=requested_symbols,
             candidates_scanned=len(price_signals),
-            top_signals=boosted[:12],
+            top_signals=boosted[:REPORT_SIGNAL_LIMIT],
             x_narrative=x_narrative,
             codex_summary=summary,
             generated_by_codex=generated_by_codex,
-            warnings=yf_warnings + x_narrative.warnings,
+            warnings=yf_warnings + _exclusion_warnings(extreme_excluded) + x_narrative.warnings,
             metadata={
                 "max_candidates": limit,
                 "codex_runner_url": self.settings.codex_runner_url,
                 "report_language": self.settings.report_language,
                 "watch": watch_state.model_dump(mode="json"),
+                "extreme_one_day_drop_exclusion_pct": EXTREME_ONE_DAY_DROP_EXCLUSION_PCT,
+                "extreme_one_day_drop_excluded": [
+                    {
+                        "symbol": signal.symbol,
+                        "name": signal.name,
+                        "day_change_pct": signal.day_change_pct,
+                    }
+                    for signal in extreme_excluded
+                ],
             },
         )
         self.store.save(report)
         if notify:
-            await self.notifier.send(report)
+            chart_paths = await asyncio.to_thread(self.charts.render_report_charts, report, 10)
+            await self.notifier.send(report, chart_paths=chart_paths)
         logger.info("scan complete report=%s codex=%s", report.id, generated_by_codex)
         return report
 
@@ -117,3 +151,29 @@ def _apply_social_boost(signals: list[PriceSignal], narrative: GrokNarrative) ->
             )
         )
     return sorted(boosted, key=lambda item: item.anomaly_score, reverse=True)
+
+
+def _exclude_extreme_one_day_drops(signals: list[PriceSignal]) -> tuple[list[PriceSignal], list[PriceSignal]]:
+    included: list[PriceSignal] = []
+    excluded: list[PriceSignal] = []
+    for signal in signals:
+        if signal.day_change_pct is not None and signal.day_change_pct <= EXTREME_ONE_DAY_DROP_EXCLUSION_PCT:
+            excluded.append(signal)
+            continue
+        included.append(signal)
+    return included, excluded
+
+
+def _exclusion_warnings(signals: list[PriceSignal]) -> list[str]:
+    if not signals:
+        return []
+    labels = ", ".join(_signal_label(signal) for signal in signals[:8])
+    suffix = "" if len(signals) <= 8 else f", ... +{len(signals) - 8}"
+    return [
+        f"single-day drops <= {abs(EXTREME_ONE_DAY_DROP_EXCLUSION_PCT):.0f}% were excluded from X search/report: "
+        f"{labels}{suffix}"
+    ]
+
+
+def _signal_label(signal: PriceSignal) -> str:
+    return f"{signal.name} ({signal.symbol})" if signal.name else signal.symbol

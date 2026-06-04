@@ -32,3 +32,8 @@ class ReportStore:
             return None
         return path.read_text(encoding="utf-8")
 
+    def latest_report(self) -> ScanReport | None:
+        text = self.latest_json()
+        if text is None:
+            return None
+        return ScanReport.model_validate_json(text)

@@ -37,6 +37,12 @@ DISCORD_ALLOWED_CHANNEL_ID=123456789012345678
 DISCORD_ALLOWED_USER_IDS=123456789012345678,234567890123456789
 ```
 
+slash command候補に出すには、invite URLのscopeに `applications.commands` も必要です。
+
+```text
+https://discord.com/oauth2/authorize?client_id=1511951091087048765&permissions=68608&integration_type=0&scope=bot%20applications.commands
+```
+
 起動:
 
 ```bash
@@ -103,7 +109,7 @@ curl -X POST http://127.0.0.1:8790/watch \
 curl http://127.0.0.1:8790/watch
 ```
 
-Discord botにも同じ自然文を投げられます。`.env` の `DISCORD_ALLOWED_CHANNEL_ID` で指定したチャンネル内で、`DISCORD_ALLOWED_USER_IDS` のユーザーからの投稿だけに反応します。DMには反応しません。
+Discord botはslash commandで操作します。`.env` の `DISCORD_ALLOWED_CHANNEL_ID` で指定したチャンネル内で、`DISCORD_ALLOWED_USER_IDS` のユーザーからのコマンドだけに反応します。DMや普通の雑談には反応しません。
 
 初回だけ、許可済みチャンネルでCodex認証を行います。
 
@@ -119,14 +125,17 @@ Discord botにも同じ自然文を投げられます。`.env` の `DISCORD_ALLO
 
 Codex認証状態はDocker named volume `codex-state` に保存されます。Discord側の許可ユーザーとcron送信先は `.env` の `DISCORD_ALLOWED_*` だけで決まります。
 
-通常の指示例:
+Discordコマンド例:
 
 ```text
-ソフトウェアだけ。固定銘柄はいらない
-AIインフラに変えて。NVDAとAMDも候補に入れて
-MSFTとCRMだけ見て
-今のテーマで急落を探して
-最新レポート
+/help
+/watch action:show
+/watch action:set text:ソフトウェアだけ。固定銘柄はいらない
+/scan
+/scan sector:ソフトウェア
+/quote symbols:MSFT CRM NOW
+/report
+/chat message:いま何を見てる？
 ```
 
 デフォルトでは米国市場の平日 09:32 ET に自動スキャンします。

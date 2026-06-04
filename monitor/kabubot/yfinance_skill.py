@@ -157,8 +157,10 @@ def _build_signal(
     volume = _numeric_series(frame.get("Volume"))
     notes: list[str] = []
 
+    name = meta.get("longName") or meta.get("shortName")
+
     if len(close) < 2:
-        return PriceSignal(symbol=symbol, name=meta.get("shortName") or meta.get("longName"), notes=["not enough price points"])
+        return PriceSignal(symbol=symbol, name=name, notes=["not enough price points"])
 
     price = _safe_float(close.iloc[-1])
     day_change_pct = _pct_change(close, 1)
@@ -184,7 +186,7 @@ def _build_signal(
 
     return PriceSignal(
         symbol=symbol,
-        name=meta.get("shortName") or meta.get("longName") or meta.get("quoteType"),
+        name=name,
         sector=meta.get("sector") or spec.yahoo_sector if spec else meta.get("sector"),
         industry=meta.get("industry"),
         currency=meta.get("currency"),

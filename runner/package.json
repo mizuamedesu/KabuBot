@@ -10,7 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@openai/codex-sdk": "^0.130.0"
+    "@openai/codex-sdk": "^0.137.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
