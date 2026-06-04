@@ -15,15 +15,23 @@ logger = logging.getLogger(__name__)
 class KabuDiscordBot(discord.Client):
     def __init__(self, settings: Settings, scanner: Scanner) -> None:
         intents = discord.Intents.default()
-        intents.dm_messages = True
+        intents.guilds = True
+        intents.dm_messages = False
         intents.guild_messages = True
         intents.message_content = True
         super().__init__(intents=intents)
         self.settings = settings
         self.scanner = scanner
+        self.allowed_user_ids = set(settings.discord_allowed_user_ids)
 
     async def on_ready(self) -> None:
         logger.info("discord bot logged in as %s", self.user)
+        await self._leave_unallowed_guilds()
+
+    async def on_guild_join(self, guild: discord.Guild) -> None:
+        if not self._guild_allowed(guild):
+            logger.warning("leaving unallowed guild %s (%s)", guild.name, guild.id)
+            await guild.leave()
 
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
@@ -38,18 +46,22 @@ class KabuDiscordBot(discord.Client):
 
         try:
             async with message.channel.typing():
-                reply = await self._handle_text(text, message)
+                reply = await self._handle_text(text)
             await _send_chunks(message.channel, reply)
         except Exception as error:
             logger.exception("discord message handling failed")
             await _send_chunks(message.channel, f"処理に失敗しました: {error}")
 
     def _should_handle(self, message: discord.Message) -> bool:
-        if isinstance(message.channel, discord.DMChannel):
-            return True
-        content = message.content.strip().lower()
-        mentioned = self.user is not None and self.user.mentioned_in(message)
-        return mentioned or content.startswith(("!kabu", "kabubot", "kabu ", "株bot"))
+        if message.guild is None or isinstance(message.channel, discord.DMChannel):
+            return False
+        if not self._guild_allowed(message.guild):
+            return False
+        if str(message.channel.id) != self.settings.discord_allowed_channel_id:
+            return False
+        if str(message.author.id) not in self.allowed_user_ids:
+            return False
+        return True
 
     def _clean_content(self, message: discord.Message) -> str:
         content = message.content.strip()
@@ -58,28 +70,15 @@ class KabuDiscordBot(discord.Client):
         content = re.sub(r"^(?:!kabu|kabubot|kabu|株bot)\s*", "", content, flags=re.I).strip()
         return content
 
-    async def _handle_text(self, text: str, message: discord.Message) -> str:
+    async def _handle_text(self, text: str) -> str:
         lowered = text.lower()
         if lowered in {"help", "ヘルプ", "使い方"}:
             return _help_text()
 
         if _is_auth_finish(lowered):
-            return await self._finish_auth(message)
+            return await self._finish_auth()
         if _is_auth_start(lowered):
-            return await self._start_auth(message)
-
-        if not self.scanner.discord_auth.is_authorized(message.author.id):
-            if self.scanner.discord_auth.has_owner():
-                return "このbotはCodex認証を完了したDiscordユーザーからの指示だけ受け付けます。"
-            return "まだDiscordユーザーがCodex認証に紐づいていません。まず `認証` と送ってください。"
-
-        if _is_bind_channel(lowered):
-            state = self.scanner.discord_auth.bind_channel(
-                channel_id=message.channel.id,
-                channel_name=_channel_name(message),
-                guild_id=message.guild.id if message.guild else None,
-            )
-            return f"このチャンネルをcronレポート送信先にしました: {state.channel_name or state.channel_id}"
+            return await self._start_auth()
 
         if any(term in lowered for term in ["auth status", "認証状態", "ログイン状態"]):
             status = await self.scanner.codex.auth_status()
@@ -96,31 +95,17 @@ class KabuDiscordBot(discord.Client):
         report = await self.scanner.scan(notify=False)
         return "\n\n".join([update.reply, report.codex_summary[:3200]])
 
-    async def _start_auth(self, message: discord.Message) -> str:
-        state = self.scanner.discord_auth.get()
-        if state.owner_user_id and state.owner_user_id != str(message.author.id):
-            return "すでに別のDiscordユーザーがCodex認証済みです。"
-        if state.pending_user_id and state.pending_user_id != str(message.author.id):
-            return "別のユーザーがCodex認証中です。認証を開始した本人だけが完了できます。"
-
+    async def _start_auth(self) -> str:
         status = await self.scanner.codex.auth_status()
         if status.get("status") == "authenticated":
-            activated = self._activate_current_channel(message)
             return (
-                "Codexはすでに認証済みです。このDiscordユーザーとチャンネルを紐づけました。\n"
-                f"ユーザー: {activated.owner_username}\n"
-                f"cron送信先: {activated.channel_name or activated.channel_id}"
+                "Codexはすでに認証済みです。\n"
+                "このbotは `.env` の `DISCORD_ALLOWED_*` で指定したサーバー/チャンネル/ユーザーだけに反応します。"
             )
 
         started = await self.scanner.codex.auth_start()
         verification_uri = str(started.get("verificationUri") or started.get("verification_uri") or "")
         user_code = str(started.get("userCode") or started.get("user_code") or "")
-        self.scanner.discord_auth.save_pending(
-            user_id=message.author.id,
-            channel_id=message.channel.id,
-            verification_uri=verification_uri or None,
-            user_code=user_code or None,
-        )
         lines = [
             "Codex認証を開始しました。ブラウザでログインして、完了したらこのチャンネルで `認証完了` と送ってください。",
         ]
@@ -132,36 +117,46 @@ class KabuDiscordBot(discord.Client):
             lines.append("認証コードを取得できませんでした。少し待ってから `認証状態` を確認してください。")
         return "\n".join(lines)
 
-    async def _finish_auth(self, message: discord.Message) -> str:
-        state = self.scanner.discord_auth.get()
-        if state.pending_user_id and state.pending_user_id != str(message.author.id):
-            return "認証を開始したDiscordユーザーだけが `認証完了` できます。"
-
+    async def _finish_auth(self) -> str:
         status = await self.scanner.codex.auth_status()
         if status.get("status") != "authenticated":
             detail = status.get("stderr") or status.get("stdout") or "まだCodexが未認証です。"
             return f"まだ完了していません。\n{detail}"
 
-        activated = self._activate_current_channel(message)
         return (
-            "認証完了。このDiscordユーザーだけがKabuBotへ指示できます。\n"
-            f"ユーザー: {activated.owner_username}\n"
-            f"cron送信先: {activated.channel_name or activated.channel_id}"
+            "認証完了。以後、このbotは `.env` で指定済みのユーザーだけの指示に従います。\n"
+            f"cron送信先: <#{self.settings.discord_allowed_channel_id}>"
         )
 
-    def _activate_current_channel(self, message: discord.Message):
-        return self.scanner.discord_auth.activate(
-            user_id=message.author.id,
-            username=str(message.author),
-            channel_id=message.channel.id,
-            channel_name=_channel_name(message),
-            guild_id=message.guild.id if message.guild else None,
-        )
+    async def _leave_unallowed_guilds(self) -> None:
+        for guild in list(self.guilds):
+            if self._guild_allowed(guild):
+                continue
+            logger.warning("leaving unallowed guild %s (%s)", guild.name, guild.id)
+            try:
+                await guild.leave()
+            except discord.HTTPException:
+                logger.exception("failed to leave unallowed guild %s (%s)", guild.name, guild.id)
+
+    def _guild_allowed(self, guild: discord.Guild) -> bool:
+        return str(guild.id) == self.settings.discord_allowed_guild_id
 
 
 async def run_discord_bot(settings: Settings, scanner: Scanner) -> KabuDiscordBot | None:
     if not settings.discord_bot_token:
         logger.info("DISCORD_BOT_TOKEN is not configured; Discord bot is disabled")
+        return None
+    missing = [
+        name
+        for name, value in [
+            ("DISCORD_ALLOWED_GUILD_ID", settings.discord_allowed_guild_id),
+            ("DISCORD_ALLOWED_CHANNEL_ID", settings.discord_allowed_channel_id),
+            ("DISCORD_ALLOWED_USER_IDS", ",".join(settings.discord_allowed_user_ids)),
+        ]
+        if not value
+    ]
+    if missing:
+        logger.warning("Discord bot private settings missing: %s; bot is disabled", ", ".join(missing))
         return None
     bot = KabuDiscordBot(settings, scanner)
     asyncio.create_task(bot.start(settings.discord_bot_token))
@@ -202,21 +197,6 @@ def _is_auth_finish(lowered: str) -> bool:
     ])
 
 
-def _is_bind_channel(lowered: str) -> bool:
-    return any(term in lowered for term in [
-        "このチャンネル",
-        "通知先",
-        "送信先",
-        "レポート先",
-        "cron先",
-        "bind channel",
-    ])
-
-
-def _channel_name(message: discord.Message) -> str:
-    return getattr(message.channel, "name", None) or "DM"
-
-
 async def _send_chunks(channel: discord.abc.Messageable, text: str) -> None:
     clean = discord.utils.escape_mentions(text.strip() or "(empty)")
     for index in range(0, len(clean), 1900):
@@ -228,7 +208,6 @@ def _help_text() -> str:
         "KabuBot commands:",
         "- `認証`",
         "- `認証完了`",
-        "- `このチャンネルを通知先にして`",
         "- `ソフトウェアだけ。固定銘柄はいらない`",
         "- `AIインフラに変えて。NVDAとAMDも候補に入れて`",
         "- `MSFTとCRMだけ見て`",

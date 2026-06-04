@@ -26,6 +26,9 @@ class Settings:
     codex_runner_url: str
     codex_model: str | None
     discord_bot_token: str | None
+    discord_allowed_guild_id: str | None
+    discord_allowed_channel_id: str | None
+    discord_allowed_user_ids: list[str]
     discord_webhook_url: str | None
     slack_webhook_url: str | None
     report_language: str
@@ -48,10 +51,19 @@ def load_settings() -> Settings:
         codex_runner_url=os.getenv("CODEX_RUNNER_URL", "http://codex-runner:8789"),
         codex_model=os.getenv("CODEX_MODEL") or None,
         discord_bot_token=os.getenv("DISCORD_BOT_TOKEN") or None,
+        discord_allowed_guild_id=os.getenv("DISCORD_ALLOWED_GUILD_ID") or None,
+        discord_allowed_channel_id=os.getenv("DISCORD_ALLOWED_CHANNEL_ID") or None,
+        discord_allowed_user_ids=_csv("DISCORD_ALLOWED_USER_IDS"),
         discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL") or None,
         slack_webhook_url=os.getenv("SLACK_WEBHOOK_URL") or None,
         report_language=os.getenv("REPORT_LANGUAGE", "ja"),
     )
+
+
+def _csv(name: str) -> list[str]:
+    raw = os.getenv(name, "")
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
 
 def _bool(name: str, default: str) -> bool:
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}

@@ -12,7 +12,6 @@ from .notifier import Notifier
 from .storage import ReportStore
 from .types import GrokNarrative, PriceSignal, ScanReport
 from .watch import WatchStore
-from .discord_state import DiscordAuthStore
 from .yfinance_skill import YFinanceSkill
 
 logger = logging.getLogger(__name__)
@@ -21,15 +20,20 @@ logger = logging.getLogger(__name__)
 class Scanner:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.discord_auth = DiscordAuthStore(settings.data_dir)
         self.yfinance = YFinanceSkill(threads=settings.yfinance_threads)
         self.grok = GrokXSkill(settings.xai_api_key, settings.grok_model, settings.grok_query_days)
         self.codex = CodexClient(settings.codex_runner_url, settings.codex_model)
+        discord_private_ready = bool(
+            settings.discord_bot_token
+            and settings.discord_allowed_guild_id
+            and settings.discord_allowed_channel_id
+            and settings.discord_allowed_user_ids
+        )
         self.notifier = Notifier(
             settings.discord_webhook_url,
             settings.slack_webhook_url,
-            settings.discord_bot_token,
-            self.discord_auth,
+            settings.discord_bot_token if discord_private_ready else None,
+            settings.discord_allowed_channel_id if discord_private_ready else None,
         )
         self.store = ReportStore(settings.data_dir)
         self.watch = WatchStore(settings.data_dir, settings.sector_query, [])

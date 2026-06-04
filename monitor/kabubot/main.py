@@ -56,7 +56,12 @@ async def health() -> dict:
 @app.get("/config")
 async def config() -> dict:
     watch = scanner.watch.get()
-    discord_auth = scanner.discord_auth.get()
+    discord_private_ready = bool(
+        settings.discord_bot_token
+        and settings.discord_allowed_guild_id
+        and settings.discord_allowed_channel_id
+        and settings.discord_allowed_user_ids
+    )
     return {
         "sector_query": watch.sector_query,
         "watch": watch.model_dump(mode="json"),
@@ -67,9 +72,11 @@ async def config() -> dict:
         "grok_model": settings.grok_model,
         "codex_runner_url": settings.codex_runner_url,
         "notifications": {
-            "discord_bot": bool(settings.discord_bot_token),
-            "discord_bound_user": bool(discord_auth.owner_user_id),
-            "discord_report_channel": bool(discord_auth.channel_id),
+            "discord_bot": discord_private_ready,
+            "discord_token_configured": bool(settings.discord_bot_token),
+            "discord_private_guild": bool(settings.discord_allowed_guild_id),
+            "discord_private_channel": bool(settings.discord_allowed_channel_id),
+            "discord_allowed_users": len(settings.discord_allowed_user_ids),
             "discord": bool(settings.discord_webhook_url),
             "slack": bool(settings.slack_webhook_url),
         },
