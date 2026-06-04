@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -53,16 +54,33 @@ def load_settings() -> Settings:
         discord_bot_token=os.getenv("DISCORD_BOT_TOKEN") or None,
         discord_allowed_guild_id=os.getenv("DISCORD_ALLOWED_GUILD_ID") or None,
         discord_allowed_channel_id=os.getenv("DISCORD_ALLOWED_CHANNEL_ID") or None,
-        discord_allowed_user_ids=_csv("DISCORD_ALLOWED_USER_IDS"),
+        discord_allowed_user_ids=_discord_id_csv("DISCORD_ALLOWED_USER_IDS"),
         discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL") or None,
         slack_webhook_url=os.getenv("SLACK_WEBHOOK_URL") or None,
         report_language=os.getenv("REPORT_LANGUAGE", "ja"),
     )
 
 
-def _csv(name: str) -> list[str]:
+def _discord_id_csv(name: str) -> list[str]:
     raw = os.getenv(name, "")
-    return [item.strip() for item in raw.split(",") if item.strip()]
+    ids: list[str] = []
+    for item in raw.split(","):
+        discord_id = _discord_id(item)
+        if discord_id:
+            ids.append(discord_id)
+    return ids
+
+
+def _discord_id(raw: str) -> str | None:
+    value = raw.strip()
+    if not value:
+        return None
+    mention = re.fullmatch(r"<@!?([0-9]{15,25})>", value)
+    if mention:
+        return mention.group(1)
+    if re.fullmatch(r"[0-9]{15,25}", value):
+        return value
+    return None
 
 
 def _bool(name: str, default: str) -> bool:

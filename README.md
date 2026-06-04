@@ -28,6 +28,7 @@ GROK_MODEL=grok-3-mini
 Discordで対話したいならBot Tokenが必要です。BotをDiscord Developer Portalで作り、Message Content Intentを有効にします。
 
 KabuBotはprivate botとして動きます。`.env` で指定したサーバー/チャンネル/ユーザー以外には反応せず、指定外のサーバーへ入った場合は自動で退出します。DiscordのDeveloper Modeを有効にして、サーバーID、チャンネルID、ユーザーIDをコピーしてください。
+`DISCORD_ALLOWED_USER_IDS` にはDiscordユーザー名ではなく数値IDを入れます。Discordのユーザーメンション形式 `<@123...>` でも読み取れます。
 
 ```env
 DISCORD_BOT_TOKEN=...
