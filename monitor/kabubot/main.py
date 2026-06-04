@@ -56,6 +56,7 @@ async def health() -> dict:
 @app.get("/config")
 async def config() -> dict:
     watch = scanner.watch.get()
+    discord_auth = scanner.discord_auth.get()
     return {
         "sector_query": watch.sector_query,
         "watch": watch.model_dump(mode="json"),
@@ -67,7 +68,8 @@ async def config() -> dict:
         "codex_runner_url": settings.codex_runner_url,
         "notifications": {
             "discord_bot": bool(settings.discord_bot_token),
-            "discord_report_channel": bool(settings.discord_report_channel_id),
+            "discord_bound_user": bool(discord_auth.owner_user_id),
+            "discord_report_channel": bool(discord_auth.channel_id),
             "discord": bool(settings.discord_webhook_url),
             "slack": bool(settings.slack_webhook_url),
         },

@@ -26,8 +26,6 @@ class Settings:
     codex_runner_url: str
     codex_model: str | None
     discord_bot_token: str | None
-    discord_owner_user_id: str | None
-    discord_report_channel_id: str | None
     discord_webhook_url: str | None
     slack_webhook_url: str | None
     report_language: str
@@ -50,8 +48,6 @@ def load_settings() -> Settings:
         codex_runner_url=os.getenv("CODEX_RUNNER_URL", "http://codex-runner:8789"),
         codex_model=os.getenv("CODEX_MODEL") or None,
         discord_bot_token=os.getenv("DISCORD_BOT_TOKEN") or None,
-        discord_owner_user_id=os.getenv("DISCORD_OWNER_USER_ID") or None,
-        discord_report_channel_id=os.getenv("DISCORD_REPORT_CHANNEL_ID") or None,
         discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL") or None,
         slack_webhook_url=os.getenv("SLACK_WEBHOOK_URL") or None,
         report_language=os.getenv("REPORT_LANGUAGE", "ja"),

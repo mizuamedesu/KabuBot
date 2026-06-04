@@ -16,23 +16,7 @@ Dockerで動く株価監視botです。Codex runnerを中に置き、yfinanceで
 cp .env.example .env
 ```
 
-既存のCodexログインを使うなら:
-
-```env
-HOST_CODEX_HOME=/Users/mizuame/.codex
-```
-
-Linux VM上で新しくCodexログインするなら:
-
-```env
-HOST_CODEX_HOME=/opt/kabubot/.codex-state
-```
-
-このディレクトリはコンテナ内の `codex` ユーザーが書ける必要があります。今回のrunnerではUIDが1001なので、Linux VMでは必要に応じて:
-
-```bash
-sudo chown -R 1001:1001 /opt/kabubot/.codex-state
-```
+Codexログイン状態はDocker named volume `codex-state` に自動保存されます。ホスト側の `.codex` パスを `.env` に書く必要はありません。初回はDiscordで `認証` を実行してください。
 
 Grok X Searchを使うなら:
 
@@ -45,8 +29,6 @@ DiscordでDM/メンション対話したいならBot Tokenが必要です。Bot�
 
 ```env
 DISCORD_BOT_TOKEN=...
-DISCORD_OWNER_USER_ID=あなたのDiscord user id
-DISCORD_REPORT_CHANNEL_ID=毎朝レポートを投げるchannel id
 ```
 
 起動:
@@ -115,7 +97,27 @@ curl -X POST http://127.0.0.1:8790/watch \
 curl http://127.0.0.1:8790/watch
 ```
 
-Discord botにも同じ自然文を投げられます。DM、メンション、または `!kabu` prefixに反応します。
+Discord botにも同じ自然文を投げられます。任意のサーバーへinviteできます。DM、メンション、または `!kabu` prefixに反応します。
+
+初回だけ、レポートを流したいチャンネルでCodex認証を紐づけます。
+
+```text
+@KabuBot 認証
+```
+
+表示されたURL/codeでCodexログインを完了したら:
+
+```text
+@KabuBot 認証完了
+```
+
+この時点で、そのDiscordユーザーだけがbotへ指示できるようになり、そのチャンネルがcronレポート送信先になります。送信先だけ変えたい場合は、認証済みユーザーが別チャンネルで:
+
+```text
+@KabuBot このチャンネルを通知先にして
+```
+
+通常の指示例:
 
 ```text
 ソフトウェアだけ。固定銘柄はいらない
@@ -141,11 +143,10 @@ MARKET_OPEN_SCAN_CRON=5 9 * * 1-5
 
 ## 通知
 
-Discord botで毎朝レポートを送る:
+Discord botで毎朝レポートを送るには、`DISCORD_BOT_TOKEN` を設定し、Discord上で `認証` -> `認証完了` を行います。認証完了したチャンネルが送信先として `data/discord_auth.json` に保存されます。
 
 ```env
 DISCORD_BOT_TOKEN=...
-DISCORD_REPORT_CHANNEL_ID=...
 ```
 
 Discord webhookでもレポート投稿だけはできます。ただしWebhookは対話できません。

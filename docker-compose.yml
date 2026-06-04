@@ -12,7 +12,7 @@ services:
       KABUBOT_SKILLS_PATH: /workspace/skills
       CODEX_MODEL: ${CODEX_MODEL:-}
     volumes:
-      - ${HOST_CODEX_HOME:-./.codex-state}:/home/codex/.codex
+      - codex-state:/home/codex/.codex
       - ./:/workspace:ro
 
   monitor:
@@ -39,10 +39,11 @@ services:
       CODEX_RUNNER_URL: http://codex-runner:8789
       CODEX_MODEL: ${CODEX_MODEL:-}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
-      DISCORD_OWNER_USER_ID: ${DISCORD_OWNER_USER_ID:-}
-      DISCORD_REPORT_CHANNEL_ID: ${DISCORD_REPORT_CHANNEL_ID:-}
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
       SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
       REPORT_LANGUAGE: ${REPORT_LANGUAGE:-ja}
     volumes:
       - ./data:/app/data
+
+volumes:
+  codex-state:
