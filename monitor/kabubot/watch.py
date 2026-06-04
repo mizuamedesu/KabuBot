@@ -7,7 +7,7 @@ from pathlib import Path
 from .types import WatchState, WatchUpdateResult
 
 
-CASHTAG_RE = re.compile(r"(?<![A-Za-z0-9])\$?([A-Z]{1,6}(?:\.[A-Z]{1,3})?|\d{4}\.T)(?![A-Za-z0-9])")
+CASHTAG_RE = re.compile(r"(?<![A-Za-z0-9])\$?([A-Z0-9]{1,8}(?:\.[A-Z]{1,3})?|\d{4}\.[A-Z]{1,3})(?![A-Za-z0-9])")
 IGNORED_TICKERS = {
     "AI",
     "API",
@@ -45,9 +45,22 @@ class WatchStore:
         except Exception:
             return self.default_state
 
-    def update_from_message(self, message: str, apply: bool = True) -> WatchUpdateResult:
+    def update_from_message(
+        self,
+        message: str,
+        apply: bool = True,
+        resolved_symbols: list[str] | None = None,
+        resolution_notes: list[str] | None = None,
+        extract_text_symbols: bool = True,
+    ) -> WatchUpdateResult:
         current = self.get()
-        next_state, actions = apply_watch_message(current, message)
+        next_state, actions = apply_watch_message(
+            current,
+            message,
+            resolved_symbols=resolved_symbols,
+            extract_text_symbols=extract_text_symbols,
+        )
+        actions.extend(resolution_notes or [])
         if apply:
             self.save(next_state)
         reply = _reply(next_state, actions, applied=apply)
@@ -58,10 +71,16 @@ class WatchStore:
         self.path.write_text(state.model_dump_json(indent=2), encoding="utf-8")
 
 
-def apply_watch_message(current: WatchState, message: str) -> tuple[WatchState, list[str]]:
+def apply_watch_message(
+    current: WatchState,
+    message: str,
+    resolved_symbols: list[str] | None = None,
+    extract_text_symbols: bool = True,
+) -> tuple[WatchState, list[str]]:
     text = message.strip()
     lowered = text.lower()
-    symbols = _extract_symbols(text)
+    text_symbols = _extract_symbols(text) if extract_text_symbols else []
+    symbols = _unique_symbols(text_symbols + (resolved_symbols or []))
     next_state = current.model_copy(deep=True)
     actions: list[str] = []
 

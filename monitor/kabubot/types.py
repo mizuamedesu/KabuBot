@@ -12,6 +12,7 @@ class PriceSignal(BaseModel):
     sector: str | None = None
     industry: str | None = None
     currency: str | None = None
+    original_currency: str | None = None
     price: float | None = None
     market_cap: float | None = None
     trailing_pe: float | None = None

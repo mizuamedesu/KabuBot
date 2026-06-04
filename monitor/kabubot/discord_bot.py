@@ -210,8 +210,17 @@ class KabuDiscordBot(discord.Client):
             if rest.startswith(("set ", "設定 ", "update ", "変更 ")):
                 update_text = rest.split(maxsplit=1)[1] if len(rest.split(maxsplit=1)) > 1 else ""
             if not update_text:
-                return "watchに何を設定するか書いてください。例: `watch set ソフトウェアだけ。固定銘柄はいらない`"
-            update = self.scanner.watch.update_from_message(update_text, apply=True)
+                return "watchに何を設定するか書いてください。例: `watch set フィグマとユニティー登録`"
+            resolved_symbols, resolution_notes, resolution_attempted = await self._resolve_watch_symbols(update_text)
+            if resolution_notes and not resolved_symbols and not _looks_like_sector_update(update_text):
+                return "銘柄を解決できませんでした。\n" + "\n".join(f"- {note}" for note in resolution_notes)
+            update = self.scanner.watch.update_from_message(
+                update_text,
+                apply=True,
+                resolved_symbols=resolved_symbols,
+                resolution_notes=resolution_notes,
+                extract_text_symbols=not resolution_attempted,
+            )
             return update.reply
 
         if command in {"scan", "スキャン"}:
@@ -273,6 +282,61 @@ class KabuDiscordBot(discord.Client):
             await _send_chart_files(channel, paths)
         except Exception:
             logger.exception("failed to send symbol charts")
+
+    async def _resolve_watch_symbols(self, text: str) -> tuple[list[str], list[str], bool]:
+        if _should_skip_codex_symbol_resolution(text):
+            return [], [], False
+
+        parsed = await self.scanner.codex.resolve_watch_symbols(text, self.scanner.watch.get().symbols)
+        items = parsed.get("symbols") if isinstance(parsed, dict) else None
+        if not isinstance(items, list) or not items:
+            explicit_symbols = _explicit_symbols_from_text(text)
+            if explicit_symbols:
+                return explicit_symbols, ["Codex曖昧解決: 応答なし。明示tickerとして処理: " + ", ".join(explicit_symbols)], True
+            unresolved = parsed.get("unresolved") if isinstance(parsed, dict) else None
+            if isinstance(unresolved, list) and unresolved:
+                return [], ["Codex曖昧解決: 未解決 " + ", ".join(str(item) for item in unresolved[:4])], True
+            return [], [], True
+
+        candidates: list[tuple[str, str, str]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            symbol = _clean_symbol(str(item.get("symbol") or ""))
+            if not symbol:
+                continue
+            query = str(item.get("query") or item.get("company") or symbol)
+            company = str(item.get("company") or "")
+            candidates.append((query, symbol, company))
+
+        symbols = list(dict.fromkeys(symbol for _, symbol, _ in candidates))
+        if not symbols:
+            return [], [], True
+
+        if _watch_text_wants_remove(text):
+            notes = [f"Codex曖昧解決: {query} -> {symbol}" for query, symbol, _ in candidates[:8]]
+            return symbols, notes, True
+
+        signals = await self.scanner.quote(symbols)
+        valid = {
+            signal.symbol: signal
+            for signal in signals
+            if signal.price is not None and not any("no price history" in note for note in signal.notes)
+        }
+        accepted: list[str] = []
+        notes: list[str] = []
+        for query, symbol, company in candidates:
+            signal = valid.get(symbol)
+            if not signal:
+                label = f"{company} ({symbol})" if company else symbol
+                notes.append(f"Codex曖昧解決: 価格取得不可 {query} -> {label}")
+                continue
+            accepted.append(symbol)
+            notes.append(f"Codex曖昧解決: {query} -> {_signal_label(signal)}")
+        unresolved = parsed.get("unresolved") if isinstance(parsed, dict) else None
+        if isinstance(unresolved, list) and unresolved:
+            notes.append("Codex曖昧解決: 未解決 " + ", ".join(str(item) for item in unresolved[:4]))
+        return list(dict.fromkeys(accepted)), notes[:8], True
 
     async def _start_auth(self) -> str:
         status = await self.scanner.codex.auth_status()
@@ -386,10 +450,69 @@ def _looks_like_command(text: str) -> bool:
 def _symbols_from_text(text: str) -> list[str]:
     symbols: list[str] = []
     for item in re.split(r"[\s,、]+", text.strip()):
-        cleaned = item.strip().upper().removeprefix("$")
-        if re.fullmatch(r"[A-Z0-9]{1,8}(?:\.[A-Z]{1,3})?|\d{4}\.T", cleaned):
+        cleaned = _clean_symbol(item)
+        if cleaned:
             symbols.append(cleaned)
     return list(dict.fromkeys(symbols))
+
+
+def _explicit_symbols_from_text(text: str) -> list[str]:
+    symbols: list[str] = []
+    for item in re.split(r"[\s,、]+", text.strip()):
+        raw = item.strip()
+        cleaned = _clean_symbol(raw)
+        if not cleaned:
+            continue
+        if raw.startswith("$") or raw == raw.upper() or re.fullmatch(r"\d{4}\.[A-Za-z]{1,3}", raw):
+            symbols.append(cleaned)
+    return list(dict.fromkeys(symbols))
+
+
+def _clean_symbol(value: str) -> str:
+    cleaned = value.strip().upper().removeprefix("$")
+    if re.fullmatch(r"[A-Z0-9]{1,8}(?:\.[A-Z]{1,3})?|\d{4}\.[A-Z]{1,3}", cleaned):
+        return cleaned
+    return ""
+
+
+def _should_skip_codex_symbol_resolution(text: str) -> bool:
+    lowered = text.lower()
+    return any(term in lowered for term in [
+        "固定銘柄はいらない",
+        "セクターだけ",
+        "テーマだけ",
+        "個別なし",
+        "銘柄固定なし",
+        "watchは自然言語",
+        "watch clear",
+        "クリア",
+        "リセット",
+        "全部外",
+    ])
+
+
+def _looks_like_sector_update(text: str) -> bool:
+    lowered = text.lower()
+    return any(term in lowered for term in [
+        "テーマ",
+        "セクター",
+        "sector",
+        "theme",
+        "ソフト",
+        "software",
+        "saas",
+        "クラウド",
+        "aiインフラ",
+        "半導体",
+        "ヘルスケア",
+        "バイオ",
+        "エネルギー",
+    ])
+
+
+def _watch_text_wants_remove(text: str) -> bool:
+    lowered = text.lower()
+    return any(term in lowered for term in ["外して", "消して", "削除", "除外", "remove", "unwatch"])
 
 
 def _watch_symbols_text(symbols: list[str]) -> str:
@@ -495,6 +618,7 @@ def _help_text() -> str:
         "KabuBot commands:",
         "- `/auth action:status`",
         "- `/watch action:show`",
+        "- `/watch action:set text:フィグマとユニティー登録`",
         "- `/watch action:set text:ソフトウェアだけ。固定銘柄はいらない`",
         "- `/scan`",
         "- `/scan sector:ソフトウェア`",

@@ -56,6 +56,7 @@ class Scanner:
         requested_symbols = symbols or []
         if not requested_symbols and watch_state.symbol_mode == "only":
             requested_symbols = watch_state.symbols
+        watch_symbols = _unique_symbols(watch_state.symbols)
         limit = max_candidates or self.settings.max_candidates
         logger.info("starting scan sector=%s symbols=%s", sector, requested_symbols)
 
@@ -65,9 +66,12 @@ class Scanner:
         else:
             seed_symbols = watch_state.symbols if watch_state.symbol_mode == "augment" else []
             price_signals, yf_warnings = self.yfinance.scan_sector(sector, seed_symbols, limit)
+            if watch_symbols:
+                watch_price_signals = self.yfinance.quote_symbols(watch_symbols)
+                price_signals = _merge_signals(price_signals, watch_price_signals)
         logger.info("yfinance complete sector=%s candidates=%d warnings=%d", sector, len(price_signals), len(yf_warnings))
 
-        scored = enrich_anomaly_scores(price_signals)
+        scored = _mark_watch_signals(enrich_anomaly_scores(price_signals), watch_symbols)
         search_candidates, extreme_excluded = _exclude_extreme_one_day_drops(scored)
         logger.info(
             "ml scoring complete sector=%s candidates=%d extreme_excluded=%d",
@@ -75,7 +79,7 @@ class Scanner:
             len(search_candidates),
             len(extreme_excluded),
         )
-        top_for_x = search_candidates[:REPORT_SIGNAL_LIMIT]
+        top_for_x = _compose_report_signals(search_candidates, watch_symbols, REPORT_SIGNAL_LIMIT)
         logger.info("x search candidates ready sector=%s top_for_x=%d", sector, len(top_for_x))
         x_narrative = await self.grok.analyze(sector, top_for_x)
         logger.info(
@@ -86,10 +90,11 @@ class Scanner:
             len(x_narrative.warnings),
         )
         boosted = _apply_social_boost(search_candidates, x_narrative)[:limit]
+        report_signals = _compose_report_signals(boosted, watch_symbols, REPORT_SIGNAL_LIMIT)
         logger.info("codex summary start sector=%s boosted=%d", sector, len(boosted))
         summary, generated_by_codex = await self.codex.summarize(
             sector,
-            boosted[:REPORT_SIGNAL_LIMIT],
+            report_signals,
             x_narrative,
             self.settings.report_language,
         )
@@ -101,7 +106,7 @@ class Scanner:
             sector_query=sector,
             symbols_requested=requested_symbols,
             candidates_scanned=len(price_signals),
-            top_signals=boosted[:REPORT_SIGNAL_LIMIT],
+            top_signals=report_signals,
             x_narrative=x_narrative,
             codex_summary=summary,
             generated_by_codex=generated_by_codex,
@@ -111,6 +116,7 @@ class Scanner:
                 "codex_runner_url": self.settings.codex_runner_url,
                 "report_language": self.settings.report_language,
                 "watch": watch_state.model_dump(mode="json"),
+                "registered_watch_symbols": watch_symbols,
                 "extreme_one_day_drop_exclusion_pct": EXTREME_ONE_DAY_DROP_EXCLUSION_PCT,
                 "extreme_one_day_drop_excluded": [
                     {
@@ -177,3 +183,50 @@ def _exclusion_warnings(signals: list[PriceSignal]) -> list[str]:
 
 def _signal_label(signal: PriceSignal) -> str:
     return f"{signal.name} ({signal.symbol})" if signal.name else signal.symbol
+
+
+def _merge_signals(primary: list[PriceSignal], secondary: list[PriceSignal]) -> list[PriceSignal]:
+    merged: dict[str, PriceSignal] = {}
+    order: list[str] = []
+    for signal in primary + secondary:
+        symbol = signal.symbol.upper()
+        if symbol not in merged:
+            order.append(symbol)
+        merged[symbol] = signal
+    return [merged[symbol] for symbol in order]
+
+
+def _mark_watch_signals(signals: list[PriceSignal], watch_symbols: list[str]) -> list[PriceSignal]:
+    watch_set = set(watch_symbols)
+    marked: list[PriceSignal] = []
+    for signal in signals:
+        if signal.symbol not in watch_set:
+            marked.append(signal)
+            continue
+        notes = list(signal.notes)
+        if "registered watch" not in notes:
+            notes.append("registered watch")
+        marked.append(signal.model_copy(update={"notes": notes}))
+    return marked
+
+
+def _compose_report_signals(signals: list[PriceSignal], watch_symbols: list[str], limit: int) -> list[PriceSignal]:
+    watch_order = {symbol: index for index, symbol in enumerate(watch_symbols)}
+    watched = sorted(
+        [signal for signal in signals if signal.symbol in watch_order],
+        key=lambda signal: watch_order[signal.symbol],
+    )
+    others = [signal for signal in signals if signal.symbol not in watch_order]
+    return _merge_signals(watched, others)[:limit]
+
+
+def _unique_symbols(symbols: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for symbol in symbols:
+        cleaned = symbol.strip().upper().removeprefix("$")
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        result.append(cleaned)
+    return result

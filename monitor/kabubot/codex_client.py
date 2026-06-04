@@ -68,6 +68,24 @@ class CodexClient:
             logger.warning("codex chat failed: %s", error)
             return None
 
+    async def resolve_watch_symbols(self, message: str, existing_symbols: list[str]) -> dict:
+        prompt = _resolve_watch_symbols_prompt(message, existing_symbols)
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+                response = await client.post(
+                    f"{self.base_url}/chat",
+                    json={"prompt": prompt, "model": self.model},
+                )
+                response.raise_for_status()
+                data = response.json()
+                text = str(data.get("text") or "").strip()
+                parsed = _parse_json_object(text)
+                if parsed:
+                    return parsed
+        except Exception as error:
+            logger.warning("codex symbol resolution failed: %s", error)
+        return {"symbols": [], "unresolved": [message]}
+
 
 def _summary_prompt(
     sector_query: str,
@@ -85,9 +103,13 @@ def _summary_prompt(
         "You are KabuBot, a market-open stock anomaly analyst.\n"
         "Do not attempt to read local skill files or mention whether files were readable. "
         "All usable market data and X-search evidence are supplied below as JSON.\n"
+        "Monetary fields are normalized to USD when `currency` is `USD`; do not reintroduce source currencies. "
+        "If a signal note says USD conversion was unavailable, state that caveat instead.\n"
         "Analysis guidance: prioritize large one-day drops, multi-day selloffs, drawdown from recent highs, "
         "volume spikes, X/social hype or fear, coordinated pumping, AI/LLM disruption narratives, and "
         "whether price action looks disconnected from the supplied fundamentals.\n"
+        "Signals whose notes include `registered watch` are user-registered daily watch stocks. "
+        "Always include a concise movement summary for those companies, even when they are less anomalous than the theme scan.\n"
         f"Write the market-open summary in {output_hint}.\n"
         "Return valid Discord Markdown. Use short headings, bullet lists, and bold company labels. "
         "Do not use Markdown tables, HTML, code fences, or raw JSON in the answer.\n"
@@ -128,6 +150,28 @@ def _chat_prompt(message: str, watch: WatchState, latest_report: str | None) -> 
     )
 
 
+def _resolve_watch_symbols_prompt(message: str, existing_symbols: list[str]) -> str:
+    payload = {
+        "user_message": message,
+        "existing_watch_symbols": existing_symbols,
+    }
+    return (
+        "You resolve vague company names in a private stock-watch Discord bot.\n"
+        "Infer likely publicly traded common-stock ticker symbols from Japanese or English natural language. "
+        "Examples of the kind of input: company names, product names, katakana names, romaji approximations, casual spelling, "
+        "minor misspellings, or mixed ticker/name text.\n"
+        "Do not use a hardcoded alias table; use your general company/ticker knowledge. "
+        "Only include likely public operating-company equities. Do not include ETFs, indexes, crypto, private companies, or acquisition targets "
+        "unless they currently have a distinct public ticker in common usage.\n"
+        "Prefer Yahoo Finance ticker format, including exchange suffixes when needed. "
+        "If the user appears to be removing a company, still resolve the company name to its ticker.\n"
+        "Return JSON only, no Markdown, no prose, no code fence. Schema:\n"
+        "{\"symbols\":[{\"query\":\"original phrase\",\"symbol\":\"YF_TICKER\",\"company\":\"Company name\",\"confidence\":0.0,\"reason\":\"short reason\"}],"
+        "\"unresolved\":[\"phrase\"]}\n\n"
+        f"Input JSON:\n{json.dumps(payload, ensure_ascii=False)}"
+    )
+
+
 def fallback_summary(sector_query: str, signals: list[PriceSignal], x_narrative: GrokNarrative) -> str:
     lines = [
         "## Headline",
@@ -150,6 +194,28 @@ def fallback_summary(sector_query: str, signals: list[PriceSignal], x_narrative:
     lines.append("## Note")
     lines.append("Codex runnerが未認証または利用不可だったため、これは決定的ロジックによるフォールバック要約です。")
     return "\n".join(lines)
+
+
+def _parse_json_object(text: str) -> dict | None:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.strip("`")
+        stripped = stripped.removeprefix("json").strip()
+    try:
+        parsed = json.loads(stripped)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        pass
+
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        parsed = json.loads(stripped[start:end + 1])
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
 
 
 def render_report_markdown(report: ScanReport) -> str:

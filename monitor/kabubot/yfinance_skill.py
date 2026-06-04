@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+from .fx import usd_rate
 from .sectors import SectorSpec, sector_spec
 from .types import PriceSignal
 
@@ -158,11 +159,21 @@ def _build_signal(
     notes: list[str] = []
 
     name = meta.get("longName") or meta.get("shortName")
+    currency = meta.get("currency")
+    conversion_rate = usd_rate(currency)
+    display_currency = "USD" if conversion_rate is not None else currency
 
     if len(close) < 2:
-        return PriceSignal(symbol=symbol, name=name, notes=["not enough price points"])
+        return PriceSignal(
+            symbol=symbol,
+            name=name,
+            currency=display_currency,
+            original_currency=currency,
+            notes=["not enough price points"],
+        )
 
-    price = _safe_float(close.iloc[-1])
+    price = _convert_to_usd(_safe_float(close.iloc[-1]), conversion_rate)
+    market_cap = _convert_to_usd(_safe_float(meta.get("marketCap")), conversion_rate)
     day_change_pct = _pct_change(close, 1)
     five_day_change_pct = _pct_change(close, 5)
     twenty_day_change_pct = _pct_change(close, 20)
@@ -183,15 +194,20 @@ def _build_signal(
     warning = meta.get("_info_warning") or meta.get("_warning")
     if warning:
         notes.append(f"metadata warning: {warning}")
+    if currency and conversion_rate is not None and currency.upper() != "USD":
+        notes.append(f"monetary values converted from {currency} to USD")
+    if currency and conversion_rate is None:
+        notes.append(f"USD conversion unavailable for {currency}; monetary values remain in source currency")
 
     return PriceSignal(
         symbol=symbol,
         name=name,
         sector=meta.get("sector") or spec.yahoo_sector if spec else meta.get("sector"),
         industry=meta.get("industry"),
-        currency=meta.get("currency"),
+        currency=display_currency,
+        original_currency=currency,
         price=price,
-        market_cap=_safe_float(meta.get("marketCap")),
+        market_cap=market_cap,
         trailing_pe=_safe_float(meta.get("trailingPE")),
         forward_pe=_safe_float(meta.get("forwardPE")),
         price_to_sales=_safe_float(meta.get("priceToSalesTrailing12Months")),
@@ -312,6 +328,14 @@ def _safe_float(value: Any) -> float | None:
         return round(number, 4)
     except Exception:
         return None
+
+
+def _convert_to_usd(value: float | None, rate: float | None) -> float | None:
+    if value is None:
+        return None
+    if rate is None:
+        return value
+    return round(value * rate, 4)
 
 
 def _safe_get(obj: Any, key: str) -> Any:
