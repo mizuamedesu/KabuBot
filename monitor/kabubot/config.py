@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,7 +24,6 @@ class Settings:
     grok_model: str
     grok_query_days: int
     codex_runner_url: str
-    runner_shared_secret: str
     codex_model: str | None
     discord_bot_token: str | None
     discord_owner_user_id: str | None
@@ -37,7 +35,6 @@ class Settings:
 
 def load_settings() -> Settings:
     data_dir = Path(os.getenv("DATA_DIR", "/app/data"))
-    runner_secret = os.getenv("RUNNER_SHARED_SECRET") or secrets.token_urlsafe(32)
     return Settings(
         port=int(os.getenv("PORT", "8790")),
         data_dir=data_dir,
@@ -51,7 +48,6 @@ def load_settings() -> Settings:
         grok_model=os.getenv("GROK_MODEL", "grok-3-mini"),
         grok_query_days=int(os.getenv("GROK_QUERY_DAYS", "2")),
         codex_runner_url=os.getenv("CODEX_RUNNER_URL", "http://codex-runner:8789"),
-        runner_shared_secret=runner_secret,
         codex_model=os.getenv("CODEX_MODEL") or None,
         discord_bot_token=os.getenv("DISCORD_BOT_TOKEN") or None,
         discord_owner_user_id=os.getenv("DISCORD_OWNER_USER_ID") or None,

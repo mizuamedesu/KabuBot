@@ -16,7 +16,7 @@ Dockerで動く株価監視botです。Codex runnerを中に置き、yfinanceで
 cp .env.example .env
 ```
 
-`.env` の `RUNNER_SHARED_SECRET` を長いランダム文字列に変更します。既存のCodexログインを使うなら:
+既存のCodexログインを使うなら:
 
 ```env
 HOST_CODEX_HOME=/Users/mizuame/.codex
@@ -58,13 +58,13 @@ docker compose --env-file .env up -d --build
 Codex認証確認:
 
 ```bash
-curl -H "Authorization: Bearer $RUNNER_SHARED_SECRET" http://127.0.0.1:8789/auth/status
+curl http://127.0.0.1:8790/auth/status
 ```
 
 未ログインの場合:
 
 ```bash
-curl -X POST -H "Authorization: Bearer $RUNNER_SHARED_SECRET" http://127.0.0.1:8789/auth/start
+curl -X POST http://127.0.0.1:8790/auth/start
 ```
 
 ## 使い方

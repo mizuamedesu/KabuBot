@@ -18,10 +18,6 @@ createServer(async (request, response) => {
       return sendJson(response, 200, { ok: true });
     }
 
-    if (!authorized(request)) {
-      return sendJson(response, 401, { error: "unauthorized" });
-    }
-
     if (request.method === "GET" && request.url === "/auth/status") {
       return sendJson(response, 200, await codex.authStatus());
     }
@@ -46,12 +42,6 @@ createServer(async (request, response) => {
 }).listen(port, "0.0.0.0", () => {
   console.log(`kabubot codex runner listening on ${port}`);
 });
-
-function authorized(request: IncomingMessage): boolean {
-  const expected = process.env.RUNNER_SHARED_SECRET;
-  if (!expected) return false;
-  return request.headers.authorization === `Bearer ${expected}`;
-}
 
 async function readJson<T>(request: IncomingMessage): Promise<T> {
   const chunks: Buffer[] = [];

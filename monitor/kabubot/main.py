@@ -79,6 +79,11 @@ async def auth_status() -> dict:
     return await scanner.codex.auth_status()
 
 
+@app.post("/auth/start")
+async def auth_start() -> dict:
+    return await scanner.codex.auth_start()
+
+
 @app.get("/watch")
 async def watch() -> dict:
     return scanner.watch.get().model_dump(mode="json")

@@ -11,17 +11,21 @@ logger = logging.getLogger(__name__)
 
 
 class CodexClient:
-    def __init__(self, base_url: str, shared_secret: str, model: str | None) -> None:
+    def __init__(self, base_url: str, model: str | None) -> None:
         self.base_url = base_url.rstrip("/")
-        self.shared_secret = shared_secret
         self.model = model
 
     async def auth_status(self) -> dict:
         async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.get(
                 f"{self.base_url}/auth/status",
-                headers=self._headers(),
             )
+            response.raise_for_status()
+            return response.json()
+
+    async def auth_start(self) -> dict:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(f"{self.base_url}/auth/start")
             response.raise_for_status()
             return response.json()
 
@@ -37,7 +41,6 @@ class CodexClient:
             async with httpx.AsyncClient(timeout=httpx.Timeout(180.0)) as client:
                 response = await client.post(
                     f"{self.base_url}/chat",
-                    headers=self._headers(),
                     json={"prompt": prompt, "model": self.model},
                 )
                 response.raise_for_status()
@@ -48,12 +51,6 @@ class CodexClient:
         except Exception as error:
             logger.warning("codex summary failed: %s", error)
         return fallback_summary(sector_query, signals, x_narrative), False
-
-    def _headers(self) -> dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self.shared_secret}",
-            "Content-Type": "application/json",
-        }
 
 
 def _summary_prompt(

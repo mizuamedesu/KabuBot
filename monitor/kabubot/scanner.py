@@ -22,7 +22,7 @@ class Scanner:
         self.settings = settings
         self.yfinance = YFinanceSkill(threads=settings.yfinance_threads)
         self.grok = GrokXSkill(settings.xai_api_key, settings.grok_model, settings.grok_query_days)
-        self.codex = CodexClient(settings.codex_runner_url, settings.runner_shared_secret, settings.codex_model)
+        self.codex = CodexClient(settings.codex_runner_url, settings.codex_model)
         self.notifier = Notifier(
             settings.discord_webhook_url,
             settings.slack_webhook_url,

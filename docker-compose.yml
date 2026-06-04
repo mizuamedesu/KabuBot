@@ -4,15 +4,12 @@ services:
       context: .
       dockerfile: runner/Dockerfile
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:8789:8789"
     environment:
       PORT: "8789"
       HOME: /home/codex
       CODEX_HOME: /home/codex/.codex
       WORKSPACE_DIR: /workspace
       KABUBOT_SKILLS_PATH: /workspace/skills
-      RUNNER_SHARED_SECRET: ${RUNNER_SHARED_SECRET}
       CODEX_MODEL: ${CODEX_MODEL:-}
     volumes:
       - ${HOST_CODEX_HOME:-./.codex-state}:/home/codex/.codex
@@ -40,7 +37,6 @@ services:
       GROK_MODEL: ${GROK_MODEL:-grok-3-mini}
       GROK_QUERY_DAYS: ${GROK_QUERY_DAYS:-2}
       CODEX_RUNNER_URL: http://codex-runner:8789
-      RUNNER_SHARED_SECRET: ${RUNNER_SHARED_SECRET}
       CODEX_MODEL: ${CODEX_MODEL:-}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       DISCORD_OWNER_USER_ID: ${DISCORD_OWNER_USER_ID:-}
