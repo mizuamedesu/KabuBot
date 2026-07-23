@@ -25,6 +25,11 @@ class PriceSignal(BaseModel):
     drawdown_from_60d_high_pct: float | None = None
     volume_ratio_20d: float | None = None
     price_zscore_20d: float | None = None
+    is_ex_dividend_date: bool = False
+    ex_dividend_date: str | None = None
+    dividend_per_share: float | None = None
+    dividend_yield_on_previous_close_pct: float | None = None
+    ex_dividend_adjusted_day_change_pct: float | None = None
     anomaly_score: float = 0.0
     notes: list[str] = Field(default_factory=list)
     source: str = "yfinance"
@@ -52,6 +57,7 @@ class ScanRequest(BaseModel):
 class WatchState(BaseModel):
     sector_query: str
     symbols: list[str] = Field(default_factory=list)
+    recently_added_symbols: list[str] = Field(default_factory=list)
     symbol_mode: Literal["augment", "only"] = "augment"
     notes: list[str] = Field(default_factory=list)
     updated_at: datetime | None = None

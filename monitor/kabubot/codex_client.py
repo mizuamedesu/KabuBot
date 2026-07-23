@@ -68,8 +68,17 @@ class CodexClient:
             logger.warning("codex chat failed: %s", error)
             return None
 
-    async def resolve_watch_symbols(self, message: str, existing_symbols: list[str]) -> dict:
-        prompt = _resolve_watch_symbols_prompt(message, existing_symbols)
+    async def resolve_watch_symbols(
+        self,
+        message: str,
+        existing_symbols: list[str],
+        recently_added_symbols: list[str] | None = None,
+    ) -> dict:
+        prompt = _resolve_watch_symbols_prompt(
+            message,
+            existing_symbols,
+            recently_added_symbols or [],
+        )
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
                 response = await client.post(
@@ -108,6 +117,8 @@ def _summary_prompt(
         "Analysis guidance: prioritize large one-day drops, multi-day selloffs, drawdown from recent highs, "
         "volume spikes, X/social hype or fear, coordinated pumping, AI/LLM disruption narratives, and "
         "whether price action looks disconnected from the supplied fundamentals.\n"
+        "When `is_ex_dividend_date` is true, explicitly distinguish the raw price drop from "
+        "`ex_dividend_adjusted_day_change_pct`; do not describe the mechanical dividend amount as a crash.\n"
         "Signals whose notes include `registered watch` are user-registered daily watch stocks. "
         "Always include a concise movement summary for those companies, even when they are less anomalous than the theme scan.\n"
         f"Write the market-open summary in {output_hint}.\n"
@@ -150,10 +161,15 @@ def _chat_prompt(message: str, watch: WatchState, latest_report: str | None) -> 
     )
 
 
-def _resolve_watch_symbols_prompt(message: str, existing_symbols: list[str]) -> str:
+def _resolve_watch_symbols_prompt(
+    message: str,
+    existing_symbols: list[str],
+    recently_added_symbols: list[str],
+) -> str:
     payload = {
         "user_message": message,
         "existing_watch_symbols": existing_symbols,
+        "recently_added_symbols": recently_added_symbols,
     }
     return (
         "You resolve vague company names in a private stock-watch Discord bot.\n"
@@ -164,7 +180,10 @@ def _resolve_watch_symbols_prompt(message: str, existing_symbols: list[str]) -> 
         "Only include likely public operating-company equities. Do not include ETFs, indexes, crypto, private companies, or acquisition targets "
         "unless they currently have a distinct public ticker in common usage.\n"
         "Prefer Yahoo Finance ticker format, including exchange suffixes when needed. "
-        "If the user appears to be removing a company, still resolve the company name to its ticker.\n"
+        "If the user appears to be removing a company, resolve approximate names, abbreviations, products, "
+        "and casual references against `existing_watch_symbols`. For removals, return only exact ticker strings "
+        "already present in `existing_watch_symbols`; never invent or normalize to a different exchange suffix. "
+        "Use `recently_added_symbols` for references such as 'the one I just added'.\n"
         "Return JSON only, no Markdown, no prose, no code fence. Schema:\n"
         "{\"symbols\":[{\"query\":\"original phrase\",\"symbol\":\"YF_TICKER\",\"company\":\"Company name\",\"confidence\":0.0,\"reason\":\"short reason\"}],"
         "\"unresolved\":[\"phrase\"]}\n\n"
@@ -185,6 +204,7 @@ def fallback_summary(sector_query: str, signals: list[PriceSignal], x_narrative:
             f"price={_fmt(signal.price)} {_currency(signal)}, "
             f"day={_fmt(signal.day_change_pct)}%, 5d={_fmt(signal.five_day_change_pct)}%, "
             f"drawdown60={_fmt(signal.drawdown_from_60d_high_pct)}%, vol20={_fmt(signal.volume_ratio_20d)}"
+            f"{_ex_dividend_text(signal)}"
         )
     if x_narrative.summary:
         lines.append("")
@@ -232,6 +252,7 @@ def render_report_markdown(report: ScanReport) -> str:
             f"price {_fmt(signal.price)} {_currency(signal)}, "
             f"day {_fmt(signal.day_change_pct)}%, 5d {_fmt(signal.five_day_change_pct)}%, "
             f"60d drawdown {_fmt(signal.drawdown_from_60d_high_pct)}%"
+            f"{_ex_dividend_text(signal)}"
         )
     if report.x_narrative.citations:
         lines.extend(["", "## X Citations"])
@@ -245,6 +266,17 @@ def _fmt(value: float | None) -> str:
 
 def _currency(signal: PriceSignal) -> str:
     return signal.currency or "quote currency"
+
+
+def _ex_dividend_text(signal: PriceSignal) -> str:
+    if not signal.is_ex_dividend_date:
+        return ""
+    return (
+        f", ex-div {signal.ex_dividend_date or 'today'}"
+        f", dividend {_fmt(signal.dividend_per_share)} {_currency(signal)}"
+        f" ({_fmt(signal.dividend_yield_on_previous_close_pct)}%)"
+        f", adjusted-day {_fmt(signal.ex_dividend_adjusted_day_change_pct)}%"
+    )
 
 
 def _signal_label(signal: PriceSignal) -> str:

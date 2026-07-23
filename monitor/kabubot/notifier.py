@@ -112,23 +112,32 @@ async def _post_discord_files_payload(
     headers: dict[str, str] | None,
     chart_paths: list[Path],
 ) -> None:
-    handles = []
-    files = []
-    try:
-        for index, path in enumerate(chart_paths[:10]):
-            handle = path.open("rb")
-            handles.append(handle)
-            files.append((f"files[{index}]", (path.name, handle, "image/png")))
-        if not files:
-            return
-        payload = {"content": "価格チャート (3ヶ月・調整後終値)"}
-        response = await client.post(
-            url,
-            headers=headers,
-            data={"payload_json": json.dumps(payload, ensure_ascii=False)},
-            files=files,
-        )
-        response.raise_for_status()
-    finally:
-        for handle in handles:
-            handle.close()
+    total = len(chart_paths)
+    for batch_start in range(0, total, 10):
+        batch = chart_paths[batch_start:batch_start + 10]
+        handles = []
+        files = []
+        try:
+            for index, path in enumerate(batch):
+                handle = path.open("rb")
+                handles.append(handle)
+                files.append((f"files[{index}]", (path.name, handle, "image/png")))
+            if not files:
+                continue
+            payload = {"content": _chart_batch_label(batch_start, len(batch), total)}
+            response = await client.post(
+                url,
+                headers=headers,
+                data={"payload_json": json.dumps(payload, ensure_ascii=False)},
+                files=files,
+            )
+            response.raise_for_status()
+        finally:
+            for handle in handles:
+                handle.close()
+
+
+def _chart_batch_label(batch_start: int, batch_size: int, total: int) -> str:
+    first = batch_start + 1
+    last = batch_start + batch_size
+    return f"価格チャート (3ヶ月・未調整終値・権利落ち表示) {first}-{last}/{total}"

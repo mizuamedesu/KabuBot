@@ -101,7 +101,8 @@ class YFinanceSkill:
                 tickers=symbols,
                 period="6mo",
                 interval="1d",
-                auto_adjust=True,
+                auto_adjust=False,
+                actions=True,
                 progress=False,
                 group_by="ticker",
                 threads=self.threads,
@@ -156,6 +157,7 @@ def _build_signal(
 ) -> PriceSignal:
     close = _numeric_series(frame.get("Close"))
     volume = _numeric_series(frame.get("Volume"))
+    dividends = _numeric_series(frame.get("Dividends"))
     notes: list[str] = []
 
     name = meta.get("longName") or meta.get("shortName")
@@ -181,6 +183,12 @@ def _build_signal(
     drawdown = _drawdown_from_high(close, 60)
     volume_ratio = _volume_ratio(volume, 20)
     zscore = _zscore(close, 20)
+    dividend_per_share_source = _value_at(dividends, close.index[-1])
+    is_ex_dividend_date = bool(dividend_per_share_source and dividend_per_share_source > 0)
+    ex_dividend_date = _date_string(close.index[-1]) if is_ex_dividend_date else None
+    dividend_yield = _dividend_yield_pct(close, dividend_per_share_source)
+    adjusted_day_change = _ex_dividend_adjusted_change_pct(close, dividend_per_share_source)
+    dividend_per_share = _convert_to_usd(dividend_per_share_source, conversion_rate)
 
     if day_change_pct is not None and day_change_pct <= -5:
         notes.append("large one-day drop")
@@ -190,6 +198,13 @@ def _build_signal(
         notes.append("deep drawdown from recent high")
     if volume_ratio is not None and volume_ratio >= 2.0:
         notes.append("volume is materially above 20-day average")
+    if is_ex_dividend_date:
+        notes.append(
+            "ex-dividend date"
+            f"; dividend={_fmt(dividend_per_share)} {display_currency or 'quote currency'}"
+            f"; theoretical drop={_fmt(dividend_yield)}%"
+            f"; ex-dividend-adjusted day={_fmt(adjusted_day_change)}%"
+        )
 
     warning = meta.get("_info_warning") or meta.get("_warning")
     if warning:
@@ -218,6 +233,11 @@ def _build_signal(
         drawdown_from_60d_high_pct=drawdown,
         volume_ratio_20d=volume_ratio,
         price_zscore_20d=zscore,
+        is_ex_dividend_date=is_ex_dividend_date,
+        ex_dividend_date=ex_dividend_date,
+        dividend_per_share=dividend_per_share if is_ex_dividend_date else None,
+        dividend_yield_on_previous_close_pct=dividend_yield,
+        ex_dividend_adjusted_day_change_pct=adjusted_day_change,
         notes=notes,
     )
 
@@ -285,6 +305,41 @@ def _pct_change(series: pd.Series, periods: int) -> float | None:
     return round((end / start - 1.0) * 100.0, 2)
 
 
+def _value_at(series: pd.Series, index: Any) -> float | None:
+    if series.empty or index not in series.index:
+        return None
+    return _safe_float(series.loc[index])
+
+
+def _dividend_yield_pct(close: pd.Series, dividend_per_share: float | None) -> float | None:
+    if not dividend_per_share or dividend_per_share <= 0 or len(close) < 2:
+        return None
+    previous_close = _safe_float(close.iloc[-2])
+    if previous_close is None or previous_close == 0:
+        return None
+    return round(dividend_per_share / previous_close * 100.0, 2)
+
+
+def _ex_dividend_adjusted_change_pct(
+    close: pd.Series,
+    dividend_per_share: float | None,
+) -> float | None:
+    if not dividend_per_share or dividend_per_share <= 0 or len(close) < 2:
+        return None
+    previous_close = _safe_float(close.iloc[-2])
+    current_close = _safe_float(close.iloc[-1])
+    if previous_close is None or current_close is None or previous_close == 0:
+        return None
+    return round(((current_close + dividend_per_share) / previous_close - 1.0) * 100.0, 2)
+
+
+def _date_string(value: Any) -> str:
+    try:
+        return pd.Timestamp(value).date().isoformat()
+    except Exception:
+        return str(value)
+
+
 def _drawdown_from_high(series: pd.Series, window: int) -> float | None:
     if series.empty:
         return None
@@ -336,6 +391,10 @@ def _convert_to_usd(value: float | None, rate: float | None) -> float | None:
     if rate is None:
         return value
     return round(value * rate, 4)
+
+
+def _fmt(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.2f}"
 
 
 def _safe_get(obj: Any, key: str) -> Any:

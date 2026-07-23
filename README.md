@@ -16,7 +16,7 @@ Dockerで動く株価監視botです。Codex runnerを中に置き、yfinanceで
 cp .env.example .env
 ```
 
-Codexログイン状態はDocker named volume `codex-state` に自動保存されます。ホスト側の `.codex` パスを `.env` に書く必要はありません。初回はDiscordで `認証` を実行してください。
+Codexログイン状態はDocker named volume `codex-state` に自動保存されます。ホスト側の `.codex` パスを `.env` に書く必要はありません。初回はDiscordで `認証` を実行してください。認証状態は保存ファイルの有無だけでなく、トークン更新とCodex上流への問い合わせまで成功した場合にのみ `authenticated` になります。期限切れ時は古い認証を消してデバイス認証をやり直します。
 
 Grok X Searchを使うなら:
 
@@ -213,6 +213,12 @@ ssh root@100.97.114.85 \
 個別watchは `.env` に固定しません。`/watch` に自然文を投げると `data/watch.json` に保存され、次回以降の自動スキャンにも反映されます。
 
 ソフトウェアの場合は、米国SaaS/AIソフト銘柄と一部日本のソフトウェア銘柄を初期ユニバースとして使い、yfinanceのセクター情報が取れた場合はそれで絞り込みます。個別銘柄を追加した場合は、その銘柄を候補に混ぜます。「だけ」と指示した場合はその銘柄だけを見ます。
+
+個別watchから削除する場合は `/watch action:remove text:CRM` のように指定します。10銘柄を超えるチャートは、Discordの1メッセージ10添付制限に合わせて10枚ずつ分割送信されます。
+
+会社名・略称による `/watch action:remove text:フィグマ` や、直近の追加まとまりを指す `/watch action:remove text:さっき追加したやつ` にも対応します。削除時の曖昧解決は現在の個別watch内だけを候補にします。テーマは `/watch action:set text:ソフトウェア系を監視` や `/watch action:set text:テーマはAIで売られているSaaS` のような自然文でも登録できます。
+
+価格スキャンは未調整終値とyfinanceの配当イベントを使い、当日が権利落ち日なら1株配当、前日終値に対する理論下落率、配当落ち分を戻した日次騰落率をシグナルへ含めます。チャート上の `Ex-div` マーカーが権利落ち日です。
 
 ## 参考API
 

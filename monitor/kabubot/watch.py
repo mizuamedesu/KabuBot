@@ -33,6 +33,7 @@ class WatchStore:
         self.default_state = WatchState(
             sector_query=default_sector_query,
             symbols=_unique_symbols(default_symbols),
+            recently_added_symbols=[],
             symbol_mode="augment",
             notes=[],
         )
@@ -85,20 +86,35 @@ def apply_watch_message(
     actions: list[str] = []
 
     if _wants_reset(lowered):
-        next_state = next_state.model_copy(update={"symbols": [], "symbol_mode": "augment"})
+        next_state = next_state.model_copy(
+            update={"symbols": [], "recently_added_symbols": [], "symbol_mode": "augment"}
+        )
         actions.append("個別watchをクリア")
 
     if symbols and _wants_remove(lowered):
         remaining = [symbol for symbol in next_state.symbols if symbol not in symbols]
         removed = sorted(set(next_state.symbols) - set(remaining))
-        next_state = next_state.model_copy(update={"symbols": remaining})
+        recent = [symbol for symbol in next_state.recently_added_symbols if symbol not in removed]
+        next_state = next_state.model_copy(
+            update={"symbols": remaining, "recently_added_symbols": recent}
+        )
         if removed:
             actions.append("銘柄を削除: " + ", ".join(removed))
+        else:
+            actions.append("削除対象は個別watchに未登録: " + ", ".join(symbols))
 
     elif symbols:
         mode = "only" if _wants_only(lowered) else next_state.symbol_mode
+        previous = set(next_state.symbols)
         merged = symbols if mode == "only" else _unique_symbols(next_state.symbols + symbols)
-        next_state = next_state.model_copy(update={"symbols": merged, "symbol_mode": mode})
+        added = symbols if mode == "only" else [symbol for symbol in symbols if symbol not in previous]
+        next_state = next_state.model_copy(
+            update={
+                "symbols": merged,
+                "recently_added_symbols": added or next_state.recently_added_symbols,
+                "symbol_mode": mode,
+            }
+        )
         label = "銘柄を限定" if mode == "only" else "銘柄を追加"
         actions.append(f"{label}: " + ", ".join(symbols))
 
@@ -108,7 +124,9 @@ def apply_watch_message(
         actions.append(f"テーマを更新: {sector}")
 
     if _wants_sector_only(lowered):
-        next_state = next_state.model_copy(update={"symbols": [], "symbol_mode": "augment"})
+        next_state = next_state.model_copy(
+            update={"symbols": [], "recently_added_symbols": [], "symbol_mode": "augment"}
+        )
         actions.append("セクター探索のみへ変更")
 
     if _wants_augment(lowered) and next_state.symbol_mode == "only":
@@ -225,10 +243,12 @@ def _unique_symbols(symbols: list[str]) -> list[str]:
 def _reply(state: WatchState, actions: list[str], applied: bool) -> str:
     prefix = "反映しました。" if applied else "プレビューです。"
     symbol_text = "なし" if not state.symbols else ", ".join(state.symbols)
+    recent_text = "なし" if not state.recently_added_symbols else ", ".join(state.recently_added_symbols)
     mode = "限定" if state.symbol_mode == "only" else "セクター候補に追加"
     action_text = " / ".join(actions) if actions else "変更なし"
     return (
         f"{prefix} {action_text}\n"
         f"現在のテーマ: {state.sector_query}\n"
-        f"個別watch: {symbol_text} ({mode})"
+        f"個別watch: {symbol_text} ({mode})\n"
+        f"直近追加: {recent_text}"
     )

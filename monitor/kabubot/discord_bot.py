@@ -83,13 +83,16 @@ class KabuDiscordBot(discord.Client):
             await self._handle_interaction(interaction, f"auth {action}")
 
         @app_commands.command(name="watch", description="監視テーマ・watch銘柄を表示または更新")
-        @app_commands.describe(action="show / set", text="set時の自然文。例: ソフトウェアだけ。固定銘柄はいらない")
+        @app_commands.describe(
+            action="show / set / remove",
+            text="set/removeの対象。例: フィグマ、CRM NVDA",
+        )
         async def watch_command(
             interaction: discord.Interaction,
-            action: Literal["show", "set"] = "show",
+            action: Literal["show", "set", "remove"] = "show",
             text: str = "",
         ) -> None:
-            command_text = "watch show" if action == "show" else f"watch set {text}"
+            command_text = "watch show" if action == "show" else f"watch {action} {text}"
             await self._handle_interaction(interaction, command_text)
 
         @app_commands.command(name="scan", description="今のwatchまたは指定テーマで急落・異常値をスキャン")
@@ -209,8 +212,14 @@ class KabuDiscordBot(discord.Client):
             update_text = rest
             if rest.startswith(("set ", "設定 ", "update ", "変更 ")):
                 update_text = rest.split(maxsplit=1)[1] if len(rest.split(maxsplit=1)) > 1 else ""
+            elif rest.startswith(("remove ", "delete ", "削除 ", "解除 ")):
+                target = rest.split(maxsplit=1)[1] if len(rest.split(maxsplit=1)) > 1 else ""
+                if target.lower() in {"all", "全部", "すべて", "全て"}:
+                    update_text = "個別watchを全部外して"
+                else:
+                    update_text = f"{target} を削除" if target else ""
             if not update_text:
-                return "watchに何を設定するか書いてください。例: `watch set フィグマとユニティー登録`"
+                return "watchの対象を書いてください。例: `watch set フィグマ` / `watch remove フィグマ`"
             resolved_symbols, resolution_notes, resolution_attempted = await self._resolve_watch_symbols(update_text)
             if resolution_notes and not resolved_symbols and not _looks_like_sector_update(update_text):
                 return "銘柄を解決できませんでした。\n" + "\n".join(f"- {note}" for note in resolution_notes)
@@ -263,7 +272,7 @@ class KabuDiscordBot(discord.Client):
             report = self.scanner.store.latest_report()
             if not report:
                 return
-            paths = await asyncio.to_thread(self.scanner.charts.render_report_charts, report, 10)
+            paths = await asyncio.to_thread(self.scanner.charts.render_report_charts, report)
             await _send_chart_files(channel, paths)
         except Exception:
             logger.exception("failed to send report charts")
@@ -277,7 +286,6 @@ class KabuDiscordBot(discord.Client):
                 self.scanner.charts.render_signal_charts,
                 signals,
                 self.scanner.charts.root / "quotes",
-                10,
             )
             await _send_chart_files(channel, paths)
         except Exception:
@@ -287,7 +295,17 @@ class KabuDiscordBot(discord.Client):
         if _should_skip_codex_symbol_resolution(text):
             return [], [], False
 
-        parsed = await self.scanner.codex.resolve_watch_symbols(text, self.scanner.watch.get().symbols)
+        watch = self.scanner.watch.get()
+        if _watch_text_wants_remove(text):
+            recent = _recent_removal_symbols(text, watch)
+            if recent:
+                return recent, ["曖昧削除: 直近追加 -> " + ", ".join(recent)], True
+
+        parsed = await self.scanner.codex.resolve_watch_symbols(
+            text,
+            watch.symbols,
+            watch.recently_added_symbols,
+        )
         items = parsed.get("symbols") if isinstance(parsed, dict) else None
         if not isinstance(items, list) or not items:
             explicit_symbols = _explicit_symbols_from_text(text)
@@ -314,8 +332,17 @@ class KabuDiscordBot(discord.Client):
             return [], [], True
 
         if _watch_text_wants_remove(text):
-            notes = [f"Codex曖昧解決: {query} -> {symbol}" for query, symbol, _ in candidates[:8]]
-            return symbols, notes, True
+            existing = set(watch.symbols)
+            removable = [symbol for symbol in symbols if symbol in existing]
+            notes = [
+                f"Codex曖昧削除: {query} -> {symbol}"
+                for query, symbol, _ in candidates[:8]
+                if symbol in existing
+            ]
+            missing = [symbol for symbol in symbols if symbol not in existing]
+            if missing:
+                notes.append("個別watchに未登録: " + ", ".join(missing[:8]))
+            return removable, notes, True
 
         signals = await self.scanner.quote(symbols)
         valid = {
@@ -347,6 +374,12 @@ class KabuDiscordBot(discord.Client):
             )
 
         started = await self.scanner.codex.auth_start()
+        started_status = str(started.get("status") or "")
+        if started_status == "already_authenticated":
+            return "Codex認証は有効です。再認証は不要です。"
+        if started_status in {"validation_unavailable", "failed"}:
+            detail = started.get("error") or started.get("stderr") or "認証状態を確認できませんでした。"
+            return f"Codex認証を開始できませんでした。\n{detail}"
         verification_uri = str(started.get("verificationUri") or started.get("verification_uri") or "")
         user_code = str(started.get("userCode") or started.get("user_code") or "")
         lines = [
@@ -515,15 +548,38 @@ def _watch_text_wants_remove(text: str) -> bool:
     return any(term in lowered for term in ["外して", "消して", "削除", "除外", "remove", "unwatch"])
 
 
+def _recent_removal_symbols(text: str, watch) -> list[str]:
+    lowered = text.lower()
+    recent_terms = [
+        "さっき",
+        "直前",
+        "今追加",
+        "最近追加",
+        "追加したやつ",
+        "追加したもの",
+        "last added",
+        "recently added",
+    ]
+    if not any(term in lowered for term in recent_terms):
+        return []
+    recent = list(getattr(watch, "recently_added_symbols", []) or [])
+    if recent:
+        return recent
+    symbols = list(getattr(watch, "symbols", []) or [])
+    return symbols[-1:] if symbols else []
+
+
 def _watch_symbols_text(symbols: list[str]) -> str:
     return "なし" if not symbols else ", ".join(symbols)
 
 
 def _watch_state_text(watch) -> str:
     mode = "限定" if watch.symbol_mode == "only" else "セクター候補に追加"
+    recent = getattr(watch, "recently_added_symbols", [])
     return (
         f"現在のテーマ: {watch.sector_query}\n"
-        f"個別watch: {_watch_symbols_text(watch.symbols)} ({mode})"
+        f"個別watch: {_watch_symbols_text(watch.symbols)} ({mode})\n"
+        f"直近追加: {_watch_symbols_text(recent)}"
     )
 
 
@@ -531,14 +587,21 @@ def _quote_text(signals) -> str:
     if not signals:
         return "価格を取得できませんでした。"
     lines = ["価格シグナル:"]
-    for signal in signals[:12]:
-        lines.append(
+    for signal in signals:
+        line = (
             f"- {_signal_label(signal)}: score={signal.anomaly_score:.1f}, "
             f"price={_fmt(signal.price)} {_currency(signal)}, "
             f"day={_fmt(signal.day_change_pct)}%, "
             f"5d={_fmt(signal.five_day_change_pct)}%, "
             f"drawdown60={_fmt(signal.drawdown_from_60d_high_pct)}%"
         )
+        if signal.is_ex_dividend_date:
+            line += (
+                f", ex-div={_fmt(signal.dividend_per_share)} {_currency(signal)}"
+                f" ({_fmt(signal.dividend_yield_on_previous_close_pct)}%),"
+                f" adjusted-day={_fmt(signal.ex_dividend_adjusted_day_change_pct)}%"
+            )
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -603,14 +666,27 @@ async def _send_interaction_chunks(interaction: discord.Interaction, text: str) 
 
 
 async def _send_chart_files(channel: discord.abc.Messageable, paths) -> None:
-    files: list[discord.File] = []
-    for path in paths[:10]:
+    paths = list(paths)
+    total = len(paths)
+    for batch_start in range(0, total, 10):
+        files: list[discord.File] = []
+        batch = paths[batch_start:batch_start + 10]
         try:
-            files.append(discord.File(str(path), filename=path.name))
-        except Exception:
-            logger.exception("failed to attach chart %s", path)
-    if files:
-        await channel.send(content="価格チャート (3ヶ月・調整後終値)", files=files)
+            for path in batch:
+                try:
+                    files.append(discord.File(str(path), filename=path.name))
+                except Exception:
+                    logger.exception("failed to attach chart %s", path)
+            if files:
+                first = batch_start + 1
+                last = batch_start + len(batch)
+                await channel.send(
+                    content=f"価格チャート (3ヶ月・未調整終値・権利落ち表示) {first}-{last}/{total}",
+                    files=files,
+                )
+        finally:
+            for file in files:
+                file.close()
 
 
 def _help_text() -> str:
@@ -619,6 +695,7 @@ def _help_text() -> str:
         "- `/auth action:status`",
         "- `/watch action:show`",
         "- `/watch action:set text:フィグマとユニティー登録`",
+        "- `/watch action:remove text:フィグマ`",
         "- `/watch action:set text:ソフトウェアだけ。固定銘柄はいらない`",
         "- `/scan`",
         "- `/scan sector:ソフトウェア`",

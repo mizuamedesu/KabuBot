@@ -8,6 +8,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+import pandas as pd
 import yfinance as yf
 
 from .fx import convert_price_series_to_usd
@@ -21,26 +22,33 @@ class ChartRenderer:
         self.root = data_dir / "charts"
         self.root.mkdir(parents=True, exist_ok=True)
 
-    def render_report_charts(self, report: ScanReport, limit: int = 10) -> list[Path]:
+    def render_report_charts(self, report: ScanReport, limit: int | None = None) -> list[Path]:
         output_dir = self.root / report.id
         output_dir.mkdir(parents=True, exist_ok=True)
         return self.render_signal_charts(report.top_signals, output_dir, limit)
 
-    def render_signal_charts(self, signals: list[PriceSignal], output_dir: Path, limit: int = 10) -> list[Path]:
+    def render_signal_charts(
+        self,
+        signals: list[PriceSignal],
+        output_dir: Path,
+        limit: int | None = None,
+    ) -> list[Path]:
         output_dir.mkdir(parents=True, exist_ok=True)
         paths: list[Path] = []
-        for signal in signals[:limit]:
+        selected = signals if limit is None else signals[:limit]
+        for signal in selected:
             path = output_dir / f"{_safe_name(signal.symbol)}.png"
             source_currency = signal.original_currency or signal.currency
             if self.render_symbol_chart(signal.symbol, path, name=signal.name, currency=source_currency):
                 paths.append(path)
         return paths
 
-    def render_symbols(self, symbols: list[str], limit: int = 10) -> list[Path]:
+    def render_symbols(self, symbols: list[str], limit: int | None = None) -> list[Path]:
         output_dir = self.root / "quotes"
         output_dir.mkdir(parents=True, exist_ok=True)
         paths: list[Path] = []
-        for symbol in symbols[:limit]:
+        selected = symbols if limit is None else symbols[:limit]
+        for symbol in selected:
             path = output_dir / f"{_safe_name(symbol)}.png"
             name, currency = _ticker_context(symbol)
             if self.render_symbol_chart(symbol, path, name=name, currency=currency):
@@ -59,7 +67,8 @@ class ChartRenderer:
                 tickers=symbol,
                 period="3mo",
                 interval="1d",
-                auto_adjust=True,
+                auto_adjust=False,
+                actions=True,
                 progress=False,
                 group_by="ticker",
                 threads=False,
@@ -84,6 +93,7 @@ class ChartRenderer:
             ax.plot(close.index, close.values, color=color, linewidth=2.2)
             ax.fill_between(close.index, close.values, close.min(), color=color, alpha=0.08)
             ax.scatter(close.index[-1], end, color=color, s=24, zorder=3)
+            _annotate_dividends(ax, close, _field_series(frame, symbol, "Dividends"))
             _annotate_extrema(ax, close)
             ax.set_title(
                 f"{label}\n3M close: {end:.2f} {unit} ({change:+.1f}%)",
@@ -91,7 +101,7 @@ class ChartRenderer:
                 fontsize=11,
                 weight="bold",
             )
-            ax.set_ylabel(f"Adjusted close ({unit})")
+            ax.set_ylabel(f"Unadjusted close ({unit})")
             ax.grid(True, axis="y", alpha=0.24)
             ax.grid(False, axis="x")
             fig.autofmt_xdate()
@@ -175,6 +185,27 @@ def _annotate_extrema(ax, close) -> None:
         )
 
 
+def _annotate_dividends(ax, close, dividends) -> None:
+    if dividends.empty:
+        return
+    events = dividends[dividends > 0].tail(4)
+    for index, dividend in events.items():
+        if index not in close.index:
+            continue
+        value = float(close.loc[index])
+        ax.scatter(index, value, color="#f59e0b", marker="v", s=38, zorder=5)
+        ax.annotate(
+            "Ex-div",
+            xy=(index, value),
+            xytext=(0, -15),
+            textcoords="offset points",
+            ha="center",
+            va="top",
+            fontsize=7,
+            color="#92400e",
+        )
+
+
 def _extrema_points(close, kind: str, count: int, excluded: set | None = None) -> list[tuple[object, float]]:
     excluded = excluded or set()
     values = list(close.values)
@@ -218,13 +249,20 @@ def _unique_extrema(points: list[tuple[object, float]], count: int, excluded: se
 
 
 def _close_series(frame, symbol: str):
-    if "Close" in frame.columns:
-        return frame["Close"].dropna()
+    return _field_series(frame, symbol, "Close")
+
+
+def _field_series(frame, symbol: str, field: str):
+    if field in frame.columns:
+        return frame[field].dropna()
     if getattr(frame.columns, "nlevels", 1) > 1:
         top_level = frame.columns.get_level_values(0)
         if symbol in top_level:
-            return frame[symbol]["Close"].dropna()
+            symbol_frame = frame[symbol]
+            return symbol_frame[field].dropna() if field in symbol_frame.columns else pd.Series(dtype=float)
         price_level = frame.columns.get_level_values(-1)
-        if "Close" in price_level:
-            return frame.xs("Close", axis=1, level=-1).iloc[:, 0].dropna()
-    return frame.iloc[:, 0].dropna()
+        if field in price_level:
+            return frame.xs(field, axis=1, level=-1).iloc[:, 0].dropna()
+    if field == "Close":
+        return frame.iloc[:, 0].dropna()
+    return pd.Series(dtype=float)

@@ -19,7 +19,7 @@ from .yfinance_skill import YFinanceSkill
 logger = logging.getLogger(__name__)
 
 EXTREME_ONE_DAY_DROP_EXCLUSION_PCT = -40.0
-REPORT_SIGNAL_LIMIT = 10
+ANALYSIS_SIGNAL_LIMIT = 10
 
 
 class Scanner:
@@ -79,7 +79,7 @@ class Scanner:
             len(search_candidates),
             len(extreme_excluded),
         )
-        top_for_x = _compose_report_signals(search_candidates, watch_symbols, REPORT_SIGNAL_LIMIT)
+        top_for_x = _compose_report_signals(search_candidates, watch_symbols, ANALYSIS_SIGNAL_LIMIT)
         logger.info("x search candidates ready sector=%s top_for_x=%d", sector, len(top_for_x))
         x_narrative = await self.grok.analyze(sector, top_for_x)
         logger.info(
@@ -90,11 +90,12 @@ class Scanner:
             len(x_narrative.warnings),
         )
         boosted = _apply_social_boost(search_candidates, x_narrative)[:limit]
-        report_signals = _compose_report_signals(boosted, watch_symbols, REPORT_SIGNAL_LIMIT)
+        delivery_limit = max(ANALYSIS_SIGNAL_LIMIT, len(watch_symbols), len(requested_symbols))
+        report_signals = _compose_report_signals(boosted, watch_symbols, delivery_limit)
         logger.info("codex summary start sector=%s boosted=%d", sector, len(boosted))
         summary, generated_by_codex = await self.codex.summarize(
             sector,
-            report_signals,
+            report_signals[:ANALYSIS_SIGNAL_LIMIT],
             x_narrative,
             self.settings.report_language,
         )
@@ -130,7 +131,7 @@ class Scanner:
         )
         self.store.save(report)
         if notify:
-            chart_paths = await asyncio.to_thread(self.charts.render_report_charts, report, 10)
+            chart_paths = await asyncio.to_thread(self.charts.render_report_charts, report)
             await self.notifier.send(report, chart_paths=chart_paths)
         logger.info("scan complete report=%s codex=%s", report.id, generated_by_codex)
         return report
@@ -163,7 +164,12 @@ def _exclude_extreme_one_day_drops(signals: list[PriceSignal]) -> tuple[list[Pri
     included: list[PriceSignal] = []
     excluded: list[PriceSignal] = []
     for signal in signals:
-        if signal.day_change_pct is not None and signal.day_change_pct <= EXTREME_ONE_DAY_DROP_EXCLUSION_PCT:
+        effective_change = (
+            signal.ex_dividend_adjusted_day_change_pct
+            if signal.is_ex_dividend_date and signal.ex_dividend_adjusted_day_change_pct is not None
+            else signal.day_change_pct
+        )
+        if effective_change is not None and effective_change <= EXTREME_ONE_DAY_DROP_EXCLUSION_PCT:
             excluded.append(signal)
             continue
         included.append(signal)
