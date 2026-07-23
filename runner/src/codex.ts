@@ -57,16 +57,20 @@ export class CodexService {
     }
 
     const probe = await probeCodexAuth(this.codexHome, this.executable);
-    if (probe.status !== "authenticated") {
-      this.markStoredAuthInvalid(probe.error || `Codex authentication is ${probe.status}.`);
+    const status = probe.status === "unauthenticated" ? "expired" : probe.status;
+    const validationError = probe.status === "unauthenticated"
+      ? "Stored Codex credentials are no longer usable. Sign in again."
+      : probe.error;
+    if (status !== "authenticated") {
+      this.markStoredAuthInvalid(validationError || `Codex authentication is ${status}.`);
     }
     return {
-      ok: probe.status === "authenticated",
-      status: probe.status,
+      ok: status === "authenticated",
+      status,
       method: probe.method,
       planType: probe.planType,
       stdout: stripAnsi(local.stdout).trim(),
-      stderr: probe.error || stripAnsi(local.stderr).trim(),
+      stderr: validationError || stripAnsi(local.stderr).trim(),
       validation: "remote",
       authProcess: this.authState
     };
