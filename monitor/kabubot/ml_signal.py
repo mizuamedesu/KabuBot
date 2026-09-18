@@ -20,15 +20,35 @@ def enrich_anomaly_scores(signals: list[PriceSignal]) -> list[PriceSignal]:
     for signal, score in zip(signals, combined, strict=False):
         if not _has_downside_pressure(signal):
             score = min(float(score), 12.0)
+        peers = [other.day_change_pct for other in signals
+                 if other.symbol != signal.symbol and signal.as_of_date
+                 and other.as_of_date == signal.as_of_date
+                 and signal.original_currency
+                 and other.original_currency == signal.original_currency
+                 and (other.industry or other.sector) == (signal.industry or signal.sector)
+                 and (signal.industry or signal.sector)
+                 and other.day_change_pct is not None and math.isfinite(other.day_change_pct)]
+        median = float(np.median(peers)) if peers else None
         notes = list(signal.notes)
+        if signal.return_zscore_20d is not None and abs(signal.return_zscore_20d) >= 3:
+            notes.append("daily total return exceeds 3 historical standard deviations")
         if score >= 75:
-            notes.append("price action is statistically extreme versus recent history")
-        enriched.append(signal.model_copy(update={"anomaly_score": round(float(score), 2), "notes": notes}))
+            notes.append("high relative downside rank among scanned candidates")
+        difference = (round(signal.day_change_pct - median, 2)
+                      if median is not None and signal.day_change_pct is not None else None)
+        enriched.append(signal.model_copy(update={
+            "anomaly_score": round(float(score), 2),
+            "statistical_score": round(float(score), 2),
+            "notes": notes,
+            "peer_count": len(peers),
+            "peer_day_median_pct": median,
+            "peer_day_difference_pp": difference,
+        }))
     return sorted(enriched, key=lambda item: item.anomaly_score, reverse=True)
 
 
 def _custom_downside_score(signal: PriceSignal) -> float:
-    day_drop = max(0.0, -(signal.day_change_pct or 0.0))
+    day_drop = max(0.0, -(_effective_day(signal) or 0.0))
     five_drop = max(0.0, -(signal.five_day_change_pct or 0.0))
     twenty_drop = max(0.0, -(signal.twenty_day_change_pct or 0.0))
     drawdown = max(0.0, -(signal.drawdown_from_60d_high_pct or 0.0))
@@ -41,7 +61,7 @@ def _custom_downside_score(signal: PriceSignal) -> float:
 
 def _has_downside_pressure(signal: PriceSignal) -> bool:
     return any([
-        (signal.day_change_pct or 0.0) < 0.0,
+        (_effective_day(signal) or 0.0) < 0.0,
         (signal.five_day_change_pct or 0.0) <= -3.0,
         (signal.twenty_day_change_pct or 0.0) <= -6.0,
         (signal.drawdown_from_60d_high_pct or 0.0) <= -10.0,
@@ -56,7 +76,7 @@ def _isolation_scores(signals: list[PriceSignal]) -> np.ndarray:
     rows = []
     for signal in signals:
         rows.append([
-            signal.day_change_pct or 0.0,
+            _effective_day(signal) or 0.0,
             signal.five_day_change_pct or 0.0,
             signal.twenty_day_change_pct or 0.0,
             signal.sixty_day_change_pct or 0.0,
@@ -70,7 +90,7 @@ def _isolation_scores(signals: list[PriceSignal]) -> np.ndarray:
 
     matrix = np.nan_to_num(np.array(rows, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
     try:
-        model = IsolationForest(n_estimators=150, contamination="auto", random_state=42)
+        model = IsolationForest(n_estimators=150, contamination="auto", random_state=42, n_jobs=1)
         model.fit(matrix)
         raw = -model.decision_function(matrix)
         return _normalize(raw)
@@ -95,3 +115,9 @@ def _safe_log(value: float | None) -> float:
     if value is None or value <= 0:
         return 0.0
     return math.log(value)
+
+
+def _effective_day(signal: PriceSignal) -> float | None:
+    if signal.is_ex_dividend_date and signal.ex_dividend_adjusted_day_change_pct is not None:
+        return signal.ex_dividend_adjusted_day_change_pct
+    return signal.day_change_pct

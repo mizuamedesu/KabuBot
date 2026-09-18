@@ -114,7 +114,27 @@ class KabuDiscordBot(discord.Client):
         async def chat_command(interaction: discord.Interaction, message: str) -> None:
             await self._handle_interaction(interaction, f"chat {message}")
 
-        for command in [help_command, auth_command, watch_command, scan_command, quote_command, report_command, chat_command]:
+        @app_commands.command(name="calendar", description="選択テーマとwatchの今月の決算・配当カレンダー")
+        async def calendar_command(interaction: discord.Interaction) -> None:
+            if not self._interaction_allowed(interaction):
+                await interaction.response.send_message("このサーバー/チャンネル/ユーザーでは使えません。", ephemeral=True)
+                return
+            await interaction.response.defer(thinking=True)
+            # A sector-wide first refresh may outlive Discord's interaction token.
+            await interaction.followup.send("今月のイベント日程を取得しています。初回は数分かかる場合があります。")
+            destination = interaction.channel or interaction.followup
+            try:
+                snapshot = await self.scanner.events.refresh()
+                await destination.send(
+                    f"今月の予定: {len(snapshot['symbols'])} 銘柄 / 未取得・部分取得 {len(snapshot['warnings'])} 件。"
+                    " E=決算予定、X=権利落ち、D=配当支払、~=予定期間。日程は変更される場合があります。",
+                    file=discord.File(self.scanner.events.root / "calendar.png"),
+                )
+            except Exception:
+                logger.exception("calendar command failed")
+                await destination.send("イベントカレンダーの取得に失敗しました。")
+
+        for command in [calendar_command, help_command, auth_command, watch_command, scan_command, quote_command, report_command, chat_command]:
             self.tree.add_command(command, guild=guild)
 
     async def _handle_interaction(self, interaction: discord.Interaction, text: str) -> None:
@@ -700,6 +720,7 @@ def _help_text() -> str:
         "- `/scan`",
         "- `/scan sector:ソフトウェア`",
         "- `/quote symbols:MSFT CRM NOW`",
+        "- `/calendar` 今月の決算・権利落ち・配当支払カレンダー",
         "- `/report`",
         "- `/chat message:いま何を見てる？`",
     ])

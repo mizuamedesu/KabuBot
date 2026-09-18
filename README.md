@@ -7,7 +7,7 @@ Dockerで動く株価監視botです。Codex runnerを中に置き、yfinanceで
 ## 構成
 
 - `codex-runner`: 参考元 `PsychologicalCounselor` と同じ形のCodex認証HTTP runner。
-- `monitor`: yfinance、Grok X Search、ML anomaly score、Discord対話、通知、スケジューラ。
+- `monitor`: yfinance、Grok X Search、CPU統計・異常度スコア、Discord対話、通知、スケジューラ。
 - `skills/`: Codexが分析時に参照する `SKILL.md` 群。
 
 ## 起動
@@ -177,27 +177,45 @@ SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 
 Webhook未設定でも `data/latest.md` と `data/reports/` に保存されます。
 
-## Proxmox VM配置メモ
+## CPUでの実行と画像の数値
 
-今回のVM配置先は `root@100.97.114.85` 上の VM 101 `gpu-docker` です。
+GPU、CUDA、NVIDIA runtimeは不要です。NumPy / scikit-learn / Matplotlibで分析・描画します。CodexとGrokは既存の外部APIによる文章要約にのみ使い、イベント取得・カレンダー・事前通知にCodex認証は不要です。
 
-- 配置先: `/opt/kabubot`
-- サービス: `docker compose --env-file .env up -d`
-- APIはVM内の `127.0.0.1:8790` にbindしています。
+`/scan` と `/quote` の画像には、1・5・20営業日の騰落率、出来高の過去20日平均に対する倍率、60日高値からの下落率、PER・予想PER・PSR、配当落ち補正後の騰落率を表示します。三角マーカーは、配当を加算した日次リターンが直前20営業日の平均から3標準偏差以上離れた日です。灰色帯は価格の直前20日平均±2標準偏差です。履歴不足や分散ゼロの場合はZ値を出しません。
 
-Proxmoxホストから状態を見る例:
+比較対象は同じ取得日・元通貨・業種（欠損時はセクター）の取得済み銘柄で、自分自身を除いた日次騰落率の中央値と、その差（percentage points）、対象件数を出します。市場全体のリターンや為替調整後のリターンではありません。CPU統計スコアはスキャン対象内の相対順位に基づく調査優先度で、確率ではありません。X由来の加点は画像のCPU統計スコアには混ぜません。
 
-```bash
-ssh root@100.97.114.85 \
-  "qm guest exec 101 -- bash -lc 'cd /opt/kabubot && docker compose --env-file .env ps'"
+## 決算・配当の事前通知と月間カレンダー
+
+起動時と毎日07:00（`MARKET_TIMEZONE`、土日も含む）にイベントを取得します。標準では **7日前・3日前・前日** に通知します。停止中に通知日を過ぎた場合も、イベント前であれば次の取得時に直近の通知段階を送信します。日数は暦日です。
+
+- テーマ監視では、個別watchに加えてテーマ銘柄とYahooセクター一覧の銘柄を自動取得します。価格ランキングや`MAX_CANDIDATES`の上位だけには絞りません。
+- 対象地域は標準で米国・日本（`EVENT_REGIONS=us,jp`）。他地域を追加でき、空文字なら地域制限なし。個別watchと既知のテーマ銘柄は地域フィルタ外でも含めます。
+- ソフトウェアはSoftware—Application / Software—Infrastructure、半導体は対応する2業種をページング取得します。AIはYahooの正式セクターでないため、既知のテーマ銘柄を使います。
+- 「MSFTとCRMだけ」のような`symbol_mode=only`では、その個別銘柄のみ対象です。
+- `EVENT_MAX_SYMBOLS`はセクター検索の取得上限（標準2000）。個別watchと既知銘柄は上限によらず含めます。上限到達・部分取得は警告に記録します。
+
+```env
+EVENT_SCAN_CRON=0 7 * * *
+EVENT_ALERT_DAYS=7,3,1
+EVENT_MAX_SYMBOLS=2000
+EVENT_REGIONS=us,jp
 ```
 
-VM内APIを叩く例:
+Discordの **`/calendar`** で今月の画像を取得できます。自動通知にも画像を添付し、月替わりや予定変更時にも更新を送ります。Slack Incoming Webhookはテキスト通知のみです。
 
 ```bash
-ssh root@100.97.114.85 \
-  "qm guest exec 101 -- bash -lc 'curl -sS http://127.0.0.1:8790/reports/latest.md'"
+curl http://127.0.0.1:8790/events
+curl http://127.0.0.1:8790/calendar.png -o calendar.png
+# 当日キャッシュを更新。notify=trueを指定すると通知も実行
+curl -X POST 'http://127.0.0.1:8790/events/refresh?notify=false'
 ```
+
+画像の凡例は `E=決算予定`、`X=権利落ち日`、`D=配当支払日`、`~=予定期間`。月またぎの決算予定期間は該当する各日に表示します。通知は期間の開始日を基準にします。提供元の市場日付を維持し、時刻や未公表日を推測しません。Yahooで取得できない日程（特に日本株）、未公表日、取得失敗は「予定なし」と区別し、画像に警告件数、`/events`に詳細を出します。決算・配当予定の完全な網羅を保証するものではありません。
+
+`data/events/latest.json`に取得結果、`calendar.png`に当月画像、`sent.json`に送信履歴を保存します。送信成功後に記録するので、再起動後も通常の二重通知を防ぎます。複数送信先の途中失敗や送信後・記録前のプロセス停止では再送される場合があります。日付変更は別イベントとして再通知します。月内の過去イベントは、以前に観測した日程を保持します。初回起動前の全履歴は復元しません。
+
+日程フィールドとページング仕様は[yfinanceのカレンダー実装](https://github.com/ranaroussi/yfinance/blob/main/yfinance/scrapers/quote.py)・[screen API](https://ranaroussi.github.io/yfinance/reference/api/yfinance.screen.html)に基づいています。
 
 ## セクター指定
 

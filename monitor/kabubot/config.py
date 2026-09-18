@@ -33,6 +33,10 @@ class Settings:
     discord_webhook_url: str | None
     slack_webhook_url: str | None
     report_language: str
+    event_scan_cron: str = "0 7 * * *"
+    event_alert_days: tuple[int, ...] = (7, 3, 1)
+    event_max_symbols: int = 2000
+    event_regions: tuple[str, ...] = ("us", "jp")
 
 
 def load_settings() -> Settings:
@@ -58,6 +62,10 @@ def load_settings() -> Settings:
         discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL") or None,
         slack_webhook_url=os.getenv("SLACK_WEBHOOK_URL") or None,
         report_language=os.getenv("REPORT_LANGUAGE", "ja"),
+        event_scan_cron=os.getenv("EVENT_SCAN_CRON", "0 7 * * *"),
+        event_alert_days=_alert_days(os.getenv("EVENT_ALERT_DAYS", "7,3,1")),
+        event_max_symbols=max(1, int(os.getenv("EVENT_MAX_SYMBOLS", "2000"))),
+        event_regions=tuple(r.strip().lower() for r in os.getenv("EVENT_REGIONS", "us,jp").split(",") if r.strip()),
     )
 
 
@@ -85,3 +93,10 @@ def _discord_id(raw: str) -> str | None:
 
 def _bool(name: str, default: str) -> bool:
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _alert_days(raw: str) -> tuple[int, ...]:
+    days = tuple(sorted({int(v.strip()) for v in raw.split(",") if v.strip()}, reverse=True))
+    if not days or min(days) <= 0:
+        raise ValueError("EVENT_ALERT_DAYS must contain positive calendar days")
+    return days

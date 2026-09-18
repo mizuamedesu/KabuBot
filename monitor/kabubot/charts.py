@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from functools import wraps
+from threading import RLock
 from pathlib import Path
 
 import matplotlib
@@ -15,6 +17,17 @@ from .fx import convert_price_series_to_usd
 from .types import PriceSignal, ScanReport
 
 logger = logging.getLogger(__name__)
+
+
+_RENDER_LOCK = RLock()
+
+
+def serialized_render(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        with _RENDER_LOCK:
+            return function(*args, **kwargs)
+    return wrapped
 
 
 class ChartRenderer:
@@ -39,7 +52,7 @@ class ChartRenderer:
         for signal in selected:
             path = output_dir / f"{_safe_name(signal.symbol)}.png"
             source_currency = signal.original_currency or signal.currency
-            if self.render_symbol_chart(signal.symbol, path, name=signal.name, currency=source_currency):
+            if self.render_symbol_chart(signal.symbol, path, name=signal.name, currency=source_currency, signal=signal):
                 paths.append(path)
         return paths
 
@@ -55,12 +68,14 @@ class ChartRenderer:
                 paths.append(path)
         return paths
 
+    @serialized_render
     def render_symbol_chart(
         self,
         symbol: str,
         path: Path,
         name: str | None = None,
         currency: str | None = None,
+        signal: PriceSignal | None = None,
     ) -> bool:
         try:
             frame = yf.download(
@@ -78,6 +93,12 @@ class ChartRenderer:
             close = _close_series(frame, symbol)
             if close.empty:
                 return False
+            source_close = close.copy()
+            dividends = _field_series(frame, symbol, "Dividends").reindex(close.index, fill_value=0)
+            total_returns = (source_close + dividends) / source_close.shift(1) - 1
+            previous_returns = total_returns.shift(1).rolling(20)
+            return_std = previous_returns.std().where(lambda x: x > 1e-12)
+            return_z = (total_returns - previous_returns.mean()) / return_std
             close, converted_to_usd = convert_price_series_to_usd(close, currency, period="3mo")
             if close.empty:
                 return False
@@ -88,11 +109,21 @@ class ChartRenderer:
 
             unit = "USD" if converted_to_usd else currency or "quote currency"
             label = _chart_label(symbol, name)
-            fig, ax = plt.subplots(figsize=(8, 4.5), dpi=150)
+            fig, ax = plt.subplots(figsize=(10, 7), dpi=150)
             color = "#0f766e" if change >= 0 else "#dc2626"
             ax.plot(close.index, close.values, color=color, linewidth=2.2)
             ax.fill_between(close.index, close.values, close.min(), color=color, alpha=0.08)
             ax.scatter(close.index[-1], end, color=color, s=24, zorder=3)
+            baseline = close.shift(1).rolling(20)
+            mean, std = baseline.mean(), baseline.std()
+            ax.plot(close.index, mean, color="#64748b", linewidth=1, label="Previous 20D mean")
+            ax.fill_between(close.index, mean - 2 * std, mean + 2 * std,
+                            color="#64748b", alpha=0.12, label="Previous 20D +/-2 SD (price)")
+            abnormal = close[return_z.reindex(close.index).abs() >= 3]
+            if not abnormal.empty:
+                ax.scatter(abnormal.index, abnormal.values, marker="^", s=45, color="#7c3aed",
+                           zorder=5, label="Total-return anomaly |Z| >= 3")
+            ax.legend(loc="best", fontsize=7)
             _annotate_dividends(ax, close, _field_series(frame, symbol, "Dividends"))
             _annotate_extrema(ax, close)
             ax.set_title(
@@ -105,7 +136,10 @@ class ChartRenderer:
             ax.grid(True, axis="y", alpha=0.24)
             ax.grid(False, axis="x")
             fig.autofmt_xdate()
-            fig.tight_layout()
+            if signal is not None:
+                fig.text(0.07, 0.025, _signal_panel(signal), fontsize=9, family="monospace",
+                         va="bottom", linespacing=1.6)
+            fig.tight_layout(rect=(0, 0.27 if signal is not None else 0, 1, 1))
             fig.savefig(path, format="png")
             plt.close(fig)
             return True
@@ -266,3 +300,15 @@ def _field_series(frame, symbol: str, field: str):
     if field == "Close":
         return frame.iloc[:, 0].dropna()
     return pd.Series(dtype=float)
+
+
+def _signal_panel(signal: PriceSignal) -> str:
+    def fmt(value, suffix=""):
+        return "n/a" if value is None else f"{value:+.2f}{suffix}"
+    return "\n".join([
+        f"As of {signal.as_of_date or 'unknown'} | CPU statistical rank {signal.statistical_score:.1f}/100 (not probability)",
+        f"Return: 1D {fmt(signal.day_change_pct, '%')}   5D {fmt(signal.five_day_change_pct, '%')}   20D {fmt(signal.twenty_day_change_pct, '%')}",
+        f"Return Z (prior 20D): {fmt(signal.return_zscore_20d)}   Volume / prior 20D: {fmt(signal.volume_ratio_20d, 'x')}   60D drawdown: {fmt(signal.drawdown_from_60d_high_pct, '%')}",
+        f"Peer 1D median (n={signal.peer_count}): {fmt(signal.peer_day_median_pct, '%')}   Difference: {fmt(signal.peer_day_difference_pp, ' pp')}",
+        f"P/E: {fmt(signal.trailing_pe)}   Forward P/E: {fmt(signal.forward_pe)}   P/S: {fmt(signal.price_to_sales)}   Ex-div adjusted 1D: {fmt(signal.ex_dividend_adjusted_day_change_pct, '%')}",
+    ])

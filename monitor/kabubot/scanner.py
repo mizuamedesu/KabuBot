@@ -9,6 +9,7 @@ from .charts import ChartRenderer
 from .codex_client import CodexClient
 from .config import Settings
 from .grok_x_skill import GrokXSkill
+from .events import EventMonitor
 from .ml_signal import enrich_anomaly_scores
 from .notifier import Notifier
 from .storage import ReportStore
@@ -43,6 +44,7 @@ class Scanner:
         self.store = ReportStore(settings.data_dir)
         self.watch = WatchStore(settings.data_dir, settings.sector_query, [])
         self.charts = ChartRenderer(settings.data_dir)
+        self.events = EventMonitor(settings, self.watch, self.notifier)
 
     async def scan(
         self,
@@ -61,13 +63,13 @@ class Scanner:
         logger.info("starting scan sector=%s symbols=%s", sector, requested_symbols)
 
         if requested_symbols:
-            price_signals = self.yfinance.quote_symbols(requested_symbols)
+            price_signals = await asyncio.to_thread(self.yfinance.quote_symbols, requested_symbols)
             yf_warnings: list[str] = []
         else:
             seed_symbols = watch_state.symbols if watch_state.symbol_mode == "augment" else []
-            price_signals, yf_warnings = self.yfinance.scan_sector(sector, seed_symbols, limit)
+            price_signals, yf_warnings = await asyncio.to_thread(self.yfinance.scan_sector, sector, seed_symbols, limit)
             if watch_symbols:
-                watch_price_signals = self.yfinance.quote_symbols(watch_symbols)
+                watch_price_signals = await asyncio.to_thread(self.yfinance.quote_symbols, watch_symbols)
                 price_signals = _merge_signals(price_signals, watch_price_signals)
         logger.info("yfinance complete sector=%s candidates=%d warnings=%d", sector, len(price_signals), len(yf_warnings))
 
@@ -137,7 +139,7 @@ class Scanner:
         return report
 
     async def quote(self, symbols: list[str]) -> list[PriceSignal]:
-        return enrich_anomaly_scores(self.yfinance.quote_symbols(symbols))
+        return enrich_anomaly_scores(await asyncio.to_thread(self.yfinance.quote_symbols, symbols))
 
 
 def _apply_social_boost(signals: list[PriceSignal], narrative: GrokNarrative) -> list[PriceSignal]:

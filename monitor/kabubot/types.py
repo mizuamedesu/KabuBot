@@ -30,6 +30,12 @@ class PriceSignal(BaseModel):
     dividend_per_share: float | None = None
     dividend_yield_on_previous_close_pct: float | None = None
     ex_dividend_adjusted_day_change_pct: float | None = None
+    as_of_date: str | None = None
+    return_zscore_20d: float | None = None
+    peer_count: int = 0
+    peer_day_median_pct: float | None = None
+    peer_day_difference_pp: float | None = None
+    statistical_score: float = 0.0
     anomaly_score: float = 0.0
     notes: list[str] = Field(default_factory=list)
     source: str = "yfinance"

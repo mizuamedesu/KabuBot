@@ -233,6 +233,8 @@ def _build_signal(
         drawdown_from_60d_high_pct=drawdown,
         volume_ratio_20d=volume_ratio,
         price_zscore_20d=zscore,
+        as_of_date=_date_string(close.index[-1]),
+        return_zscore_20d=_return_zscore(close, dividends),
         is_ex_dividend_date=is_ex_dividend_date,
         ex_dividend_date=ex_dividend_date,
         dividend_per_share=dividend_per_share if is_ex_dividend_date else None,
@@ -405,3 +407,12 @@ def _safe_get(obj: Any, key: str) -> Any:
             return getattr(obj, key)
         except Exception:
             return None
+
+
+def _return_zscore(close: pd.Series, dividends: pd.Series) -> float | None:
+    # Compare the latest total return with PREVIOUS observations, never itself.
+    returns = ((close + dividends.reindex(close.index, fill_value=0)) / close.shift(1) - 1).dropna()
+    baseline = returns.iloc[:-1].tail(20)
+    if len(baseline) < 20 or baseline.std() <= 1e-12:
+        return None
+    return _safe_float((returns.iloc[-1] - baseline.mean()) / baseline.std())

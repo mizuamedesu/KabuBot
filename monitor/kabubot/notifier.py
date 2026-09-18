@@ -39,6 +39,24 @@ class Notifier:
         if not any([self.discord_bot_token and self.discord_report_channel_id, self.discord_webhook_url, self.slack_webhook_url]):
             logger.info("no webhook configured; report stored only: %s", report.id)
 
+    async def send_message(self, text: str, paths: list[Path] | None = None) -> bool:
+        """Return true only after all configured destinations accepted the delivery."""
+        delivered = False
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            if self.discord_bot_token and self.discord_report_channel_id:
+                await self._post_discord_bot(client, self.discord_report_channel_id, text)
+                await self._post_discord_bot_files(client, self.discord_report_channel_id, paths or [])
+                delivered = True
+            if self.discord_webhook_url:
+                await self._post_discord(client, text)
+                await self._post_discord_files(client, paths or [])
+                delivered = True
+            if self.slack_webhook_url:
+                for chunk in _chunks(text, 3000):
+                    await self._post_slack(client, chunk)
+                delivered = True
+        return delivered
+
     async def _post_discord_bot(self, client: httpx.AsyncClient, channel_id: str, text: str) -> None:
         url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
         headers = {"Authorization": f"Bot {self.discord_bot_token}"}
@@ -140,4 +158,4 @@ async def _post_discord_files_payload(
 def _chart_batch_label(batch_start: int, batch_size: int, total: int) -> str:
     first = batch_start + 1
     last = batch_start + batch_size
-    return f"価格チャート (3ヶ月・未調整終値・権利落ち表示) {first}-{last}/{total}"
+    return f"KabuBot 画像 {first}-{last}/{total}"

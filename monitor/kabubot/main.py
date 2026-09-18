@@ -9,7 +9,7 @@ import uvicorn
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 
 from .config import load_settings
 from .discord_bot import run_discord_bot
@@ -35,13 +35,20 @@ async def lifespan(app: FastAPI):
         max_instances=1,
         coalesce=True,
     )
+    scheduler.add_job(
+        scheduled_events,
+        CronTrigger.from_crontab(settings.event_scan_cron, timezone=settings.market_timezone),
+        id="market-events", replace_existing=True, max_instances=1, coalesce=True,
+    )
     scheduler.start()
+    event_startup = asyncio.create_task(scheduled_events())
     discord_bot = await run_discord_bot(settings, scanner)
     if settings.run_on_start:
         asyncio.create_task(scheduled_scan())
     yield
     if discord_bot:
         await discord_bot.close()
+    event_startup.cancel()
     scheduler.shutdown(wait=False)
 
 
@@ -68,6 +75,10 @@ async def config() -> dict:
         "max_candidates": settings.max_candidates,
         "market_timezone": settings.market_timezone,
         "market_open_cron": settings.market_open_cron,
+        "event_scan_cron": settings.event_scan_cron,
+        "event_alert_days": settings.event_alert_days,
+        "event_max_symbols": settings.event_max_symbols,
+        "event_regions": settings.event_regions,
         "x_search_enabled": bool(settings.xai_api_key),
         "grok_model": settings.grok_model,
         "codex_runner_url": settings.codex_runner_url,
@@ -140,6 +151,29 @@ async def latest_json() -> dict:
     if text is None:
         raise HTTPException(status_code=404, detail="no report yet")
     return json.loads(text)
+
+
+@app.get("/events")
+async def events() -> dict:
+    return await scanner.events.refresh()
+
+
+@app.get("/calendar.png")
+async def calendar_image():
+    await scanner.events.refresh()
+    return FileResponse(scanner.events.root / "calendar.png", media_type="image/png")
+
+
+@app.post("/events/refresh")
+async def refresh_events(notify: bool = False) -> dict:
+    return await scanner.events.refresh(notify=notify, force=True)
+
+
+async def scheduled_events() -> None:
+    try:
+        await scanner.events.refresh(notify=True, force=True)
+    except Exception:
+        logging.exception("scheduled events failed")
 
 
 async def scheduled_scan() -> None:

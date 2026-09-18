@@ -14,7 +14,10 @@ Use this skill when KabuBot needs generic anomaly detection or ranking across st
 - It does not mean the stock is cheap, safe, or likely to rebound.
 - Prefer explanations that name the exact feature causing the score.
 
-## Future GPU Extension
+## CPU-only execution
 
-If a GPU VM is available, this skill can be extended with sequence models, embeddings over filings/news, or custom finetuned classifiers. The default production path should remain lightweight and auditable.
-
+All statistical calculations, IsolationForest and Matplotlib rendering run on CPU.
+Do not introduce GPU runtimes, CUDA, local language models or accelerator requirements.
+The rank is relative to scanned candidates, not a probability or a hypothesis-test p-value.
+Daily total-return Z compares against the previous 20 observations and adjusts cash dividends.
+Peer comparisons exclude the subject and require the same date, source currency and industry (sector fallback).
