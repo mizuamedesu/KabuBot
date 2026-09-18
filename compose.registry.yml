@@ -1,26 +1,19 @@
 services:
   codex-runner:
     image: ghcr.io/mizuamedesu/kabubot-runner:${KABUBOT_IMAGE_TAG:-latest}
-    build:
-      context: .
-      dockerfile: runner/Dockerfile
     restart: unless-stopped
     environment:
       PORT: "8789"
       HOME: /home/codex
       CODEX_HOME: /home/codex/.codex
       WORKSPACE_DIR: /workspace
-      KABUBOT_SKILLS_PATH: /workspace/skills
+      KABUBOT_SKILLS_PATH: /app/skills
       CODEX_MODEL: ${CODEX_MODEL:-}
     volumes:
       - codex-state:/home/codex/.codex
-      - ./:/workspace:ro
 
   monitor:
     image: ghcr.io/mizuamedesu/kabubot-monitor:${KABUBOT_IMAGE_TAG:-latest}
-    build:
-      context: .
-      dockerfile: monitor/Dockerfile
     restart: unless-stopped
     depends_on:
       - codex-runner

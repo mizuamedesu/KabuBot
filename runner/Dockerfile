@@ -6,10 +6,11 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY runner/package.json runner/tsconfig.json ./
-RUN npm install
+COPY runner/package.json runner/package-lock.json runner/tsconfig.json ./
+RUN npm ci
 
 COPY runner/src ./src
+COPY skills /app/skills
 RUN npm run build \
   && npm prune --omit=dev
 
@@ -21,6 +22,7 @@ USER codex
 ENV HOME=/home/codex
 ENV CODEX_HOME=/home/codex/.codex
 ENV PORT=8789
+ENV KABUBOT_SKILLS_PATH=/app/skills
 EXPOSE 8789
 
 CMD ["node", "dist/server.js"]

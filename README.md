@@ -61,6 +61,22 @@ curl http://127.0.0.1:8790/auth/status
 curl -X POST http://127.0.0.1:8790/auth/start
 ```
 
+## GitHub Container Registryから起動
+
+`main`へのpush時にテスト後、CPU版の`linux/amd64`・`linux/arm64`イメージをGitHub Actionsでビルド・発行します。
+
+- `ghcr.io/mizuamedesu/kabubot-monitor:latest`
+- `ghcr.io/mizuamedesu/kabubot-runner:latest`
+
+コミットを固定する場合は`KABUBOT_IMAGE_TAG=sha-<40桁のコミットSHA>`を指定します。配布用の`compose.registry.yml`にはローカルビルドやソースのbind mountが不要で、分析用skillsはrunnerイメージに同梱しています。
+
+```bash
+docker compose --env-file .env -f compose.registry.yml pull
+docker compose --env-file .env -f compose.registry.yml up -d
+```
+
+GHCRパッケージが非公開の場合は、事前に`read:packages`権限のあるアカウントで`docker login ghcr.io`してください。
+
 ## 使い方
 
 手動スキャン:
