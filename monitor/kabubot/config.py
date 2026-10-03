@@ -47,7 +47,7 @@ def load_settings() -> Settings:
         sector_query=os.getenv("SECTOR_QUERY", "ソフトウェア"),
         max_candidates=int(os.getenv("MAX_CANDIDATES", "45")),
         market_timezone=os.getenv("MARKET_TIMEZONE", "America/New_York"),
-        market_open_cron=os.getenv("MARKET_OPEN_SCAN_CRON", "32 9 * * 1-5"),
+        market_open_cron=os.getenv("MARKET_OPEN_SCAN_CRON", "32 9 * * mon-fri"),
         run_on_start=_bool("RUN_ON_START", "false"),
         yfinance_threads=_bool("YFINANCE_THREADS", "true"),
         xai_api_key=os.getenv("XAI_API_KEY"),

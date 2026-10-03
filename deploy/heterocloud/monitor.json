@@ -1,0 +1,72 @@
+{
+  "project_id": "019fbdaa-c85e-7950-b0f1-356e78da4b6e",
+  "name": "kabubot-monitor",
+  "spec": {
+    "region": "heteronet-global",
+    "image": "ghcr.io/mizuamedesu/kabubot-monitor@sha256:782a0ce8db5a06b3742f9707b92cb007752aed911f136f539d1ff14934e9830b",
+    "replicas": 1,
+    "cpu_millis": 1000,
+    "memory_mib": 1536,
+    "ephemeral_storage_gib": 5,
+    "ports": [
+      {
+        "name": "http",
+        "protocol": "tcp",
+        "container_port": 8790
+      }
+    ],
+    "exposure": {
+      "type": "internal",
+      "endpoint_mode": "ip",
+      "traffic_mode": "forwarded",
+      "allowed_source_cidrs": [],
+      "denied_source_cidrs": []
+    },
+    "egress": {
+      "mode": "internet",
+      "allow_same_organization": true,
+      "allowed_destination_cidrs": [],
+      "denied_destination_cidrs": []
+    },
+    "env": {
+      "PORT": "8790",
+      "DATA_DIR": "/root/kabubot-data",
+      "MARKET_TIMEZONE": "America/New_York",
+      "MARKET_OPEN_SCAN_CRON": "32 9 * * mon-fri",
+      "EVENT_SCAN_CRON": "0 7 * * *",
+      "EVENT_ALERT_DAYS": "7,3,1",
+      "EVENT_MAX_SYMBOLS": "2000",
+      "EVENT_REGIONS": "us,jp",
+      "RUN_ON_START": "false",
+      "SECTOR_QUERY": "ソフトウェア",
+      "MAX_CANDIDATES": "45",
+      "CODEX_RUNNER_URL": "http://flash-01a0ff76-0c51-7752-b251-792c215ff47d.heterocloud-flash-workloads.svc.cluster.local:30002",
+      "GROK_MODEL": "grok-3-mini",
+      "GROK_QUERY_DAYS": "2",
+      "REPORT_LANGUAGE": "ja",
+      "MPLCONFIGDIR": "/root/matplotlib",
+      "XDG_CACHE_HOME": "/root/.cache",
+      "OPENBLAS_NUM_THREADS": "1",
+      "OMP_NUM_THREADS": "1",
+      "DISCORD_ALLOWED_GUILD_ID": "1273231967395123283",
+      "DISCORD_ALLOWED_CHANNEL_ID": "1511985000671871048",
+      "DISCORD_ALLOWED_USER_IDS": "713952514143420436"
+    },
+    "command": [
+      "/bin/sh",
+      "-c"
+    ],
+    "args": [
+      "cd /app && exec python -u -m kabubot.main >> /tmp/kabubot-monitor.log 2>&1"
+    ],
+    "metadata": {
+      "application": "kabubot",
+      "component": "monitor",
+      "source_commit": "ec151c920a57244e83991e05d50ff4749b4b35c6"
+    },
+    "secret_env": {
+      "DISCORD_BOT_TOKEN": "discord-bot-token",
+      "XAI_API_KEY": "xai-api-key"
+    }
+  }
+}

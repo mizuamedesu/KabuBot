@@ -16,7 +16,7 @@ Dockerで動く株価監視botです。Codex runnerを中に置き、yfinanceで
 cp .env.example .env
 ```
 
-Codexログイン状態はDocker named volume `codex-state` に自動保存されます。ホスト側の `.codex` パスを `.env` に書く必要はありません。初回はDiscordで `認証` を実行してください。認証状態は保存ファイルの有無だけでなく、トークン更新とCodex上流への問い合わせまで成功した場合にのみ `authenticated` になります。期限切れ時は古い認証を消してデバイス認証をやり直します。
+Codexログイン状態はDocker named volume `codex-state` に自動保存されます。ホスト側の `.codex` パスを `.env` に書く必要はありません。初回はDiscordで `認証` を実行してください。認証状態は保存ファイルの有無だけでなく、保存された認証でCodex上流への問い合わせまで成功した場合にのみ `authenticated` になります。トークンはCodexの通常の更新処理に任せ、状態確認のたびに強制更新しません。期限切れ時は古い認証を消してデバイス認証をやり直します。
 
 Grok X Searchを使うなら:
 
@@ -76,6 +76,35 @@ docker compose --env-file .env -f compose.registry.yml up -d
 ```
 
 GHCRパッケージが非公開の場合は、事前に`read:packages`権限のあるアカウントで`docker login ghcr.io`してください。
+
+## HeteroCloudへの配置
+
+2026-10-03にFlashへ配置済みです。適用した設定は`deploy/heterocloud/runner.json`と`deploy/heterocloud/monitor.json`に保存しています。イメージはdigestで固定しています。monitorは`ec151c920a57244e83991e05d50ff4749b4b35c6`、runnerは認証確認を修正した`11ad87a2184f3696cab65f08151b3127a88a7193`のビルドです。
+
+- Bot本体: `01a0ff77-c342-7a80-b596-85bb3c792c89`（1 vCPU / 1536 MiB / ディスク5 GiB）
+- Codex runner: `01a0ff76-0c51-7752-b251-792c215ff47d`（0.5 vCPU / 768 MiB / ディスク5 GiB）
+- どちらも内部公開、常時1レプリカ。DiscordへはBotから接続します。
+- Flashの永続ホーム配下の`/root/kabubot-data`にwatch・レポート・通知履歴、`/root/kabubot-codex`にCodex認証を保存します。サービス削除時は事前にバックアップしてください。
+- Discord Bot TokenとxAI API KeyはFlashのシークレット管理へ登録し、`secret_env`で参照します。JSONにはトークンを保存していません。
+- cronはBot内のAPSchedulerで実行します。株価スキャンは`32 9 * * mon-fri`、決算・配当チェックは`0 7 * * *`、タイムゾーンは`America/New_York`です。日本時間ではそれぞれ夏時間22:32 / 20:00、冬時間23:32 / 21:00になります。
+
+初回のCodexログインは許可済みDiscordチャンネルで`/auth action:start`を実行し、表示されたURLで認証後、`/auth action:finish`で確認します。未認証でも株価取得・cron・イベント通知は動き、株価レポートの文章はフォールバックを使います。
+
+稼働状態の確認:
+
+```bash
+heterocloud flash get 01a0ff77-c342-7a80-b596-85bb3c792c89
+heterocloud flash get 01a0ff76-0c51-7752-b251-792c215ff47d
+```
+
+設定変更後の再適用（`project_id`は作成時のみ使用）:
+
+```bash
+jq 'del(.project_id)' deploy/heterocloud/runner.json | heterocloud flash update 01a0ff76-0c51-7752-b251-792c215ff47d -f -
+jq 'del(.project_id)' deploy/heterocloud/monitor.json | heterocloud flash update 01a0ff77-c342-7a80-b596-85bb3c792c89 -f -
+```
+
+Flashコンソールのシェルから`curl -fsS http://127.0.0.1:8790/health`でcronの起動状態、`/config`で設定を確認できます。Botの起動ログは`/tmp/kabubot-monitor.log`です。
 
 ## 使い方
 
@@ -158,14 +187,16 @@ Discordコマンド例:
 
 ```env
 MARKET_TIMEZONE=America/New_York
-MARKET_OPEN_SCAN_CRON=32 9 * * 1-5
+MARKET_OPEN_SCAN_CRON=32 9 * * mon-fri
 ```
+
+曜日は`mon-fri`のように名前で指定します。APSchedulerは月曜を`0`とするため、通常のcronで使う`1-5`では火曜〜土曜になってしまいます。
 
 日本市場向けにするなら例:
 
 ```env
 MARKET_TIMEZONE=Asia/Tokyo
-MARKET_OPEN_SCAN_CRON=5 9 * * 1-5
+MARKET_OPEN_SCAN_CRON=5 9 * * mon-fri
 ```
 
 ## 通知

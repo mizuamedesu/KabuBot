@@ -1,0 +1,45 @@
+{
+  "project_id": "019fbdaa-c85e-7950-b0f1-356e78da4b6e",
+  "name": "kabubot-runner",
+  "spec": {
+    "region": "heteronet-global",
+    "image": "ghcr.io/mizuamedesu/kabubot-runner@sha256:78be85965c959eedc871747aa632dc027e72ce6dbb1b47243b387f62969597d8",
+    "replicas": 1,
+    "cpu_millis": 500,
+    "memory_mib": 768,
+    "ephemeral_storage_gib": 5,
+    "ports": [
+      {
+        "name": "http",
+        "protocol": "tcp",
+        "container_port": 8789
+      }
+    ],
+    "exposure": {
+      "type": "internal",
+      "endpoint_mode": "ip",
+      "traffic_mode": "forwarded",
+      "allowed_source_cidrs": [],
+      "denied_source_cidrs": []
+    },
+    "egress": {
+      "mode": "internet",
+      "allow_same_organization": true,
+      "allowed_destination_cidrs": [],
+      "denied_destination_cidrs": []
+    },
+    "env": {
+      "PORT": "8789",
+      "CODEX_HOME": "/root/kabubot-codex",
+      "WORKSPACE_DIR": "/root/kabubot-workspace",
+      "KABUBOT_SKILLS_PATH": "/app/skills"
+    },
+    "command": [],
+    "args": [],
+    "metadata": {
+      "application": "kabubot",
+      "component": "runner",
+      "source_commit": "11ad87a2184f3696cab65f08151b3127a88a7193"
+    }
+  }
+}
