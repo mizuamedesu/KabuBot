@@ -34,15 +34,23 @@ interface AppServerMessage {
 export class CodexService {
   private authState: AuthProcessState = { status: "idle", output: "" };
   private authProcessRunning = false;
-  private readonly executable = codexBin();
+  private authStatusInFlight?: Promise<Record<string, unknown>>;
 
   constructor(
     private readonly codexHome: string,
     private readonly workspace: string,
-    private readonly skillsPath: string
+    private readonly skillsPath: string,
+    private readonly executable = codexBin()
   ) {}
 
   async authStatus(): Promise<Record<string, unknown>> {
+    this.authStatusInFlight ??= this.checkAuthStatus().finally(() => {
+      this.authStatusInFlight = undefined;
+    });
+    return this.authStatusInFlight;
+  }
+
+  private async checkAuthStatus(): Promise<Record<string, unknown>> {
     const local = await runCodex(["login", "status"], this.codexHome, this.executable);
     if (local.code !== 0) {
       this.markStoredAuthInvalid("Codex credentials are not present.");
@@ -61,7 +69,13 @@ export class CodexService {
     const validationError = probe.status === "unauthenticated"
       ? "Stored Codex credentials are no longer usable. Sign in again."
       : probe.error;
-    if (status !== "authenticated") {
+    if (status === "authenticated") {
+      this.authState = {
+        ...this.authState,
+        status: "authenticated",
+        error: undefined
+      };
+    } else {
       this.markStoredAuthInvalid(validationError || `Codex authentication is ${status}.`);
     }
     return {
@@ -311,7 +325,10 @@ async function probeCodexAuth(codexHome: string, executable: string): Promise<Au
         sendAppServerMessage(child, {
           method: "account/read",
           id: 1,
-          params: { refreshToken: true }
+          // Let Codex load/refresh managed credentials normally. Forcing a refresh
+          // on every status poll can return a null account for valid credentials.
+          // The rate-limits request below still validates access with the server.
+          params: { refreshToken: false }
         });
         return;
       }
