@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import textwrap
 from functools import wraps
 from threading import RLock
 from pathlib import Path
@@ -10,6 +11,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+from matplotlib import font_manager
 import pandas as pd
 import yfinance as yf
 
@@ -20,6 +22,17 @@ logger = logging.getLogger(__name__)
 
 
 _RENDER_LOCK = RLock()
+
+# Linux containers need an explicit CJK font for company names and calendars.
+_CJK_FONT = Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc")
+if _CJK_FONT.exists():
+    # Persistent Matplotlib caches may predate the font's installation.
+    font_manager.fontManager.addfont(str(_CJK_FONT))
+_AVAILABLE_FONTS = {font.name for font in font_manager.fontManager.ttflist}
+for _font in ("Noto Sans CJK JP", "Hiragino Sans", "Yu Gothic", "IPAexGothic"):
+    if _font in _AVAILABLE_FONTS:
+        plt.rcParams["font.family"] = [_font, "DejaVu Sans"]
+        break
 
 
 def serialized_render(function):
@@ -161,7 +174,7 @@ def _chart_label(symbol: str, name: str | None) -> str:
     if not clean_name:
         return symbol
     label = f"{clean_name} ({symbol})"
-    return label if len(label) <= 70 else f"{label[:67]}..."
+    return "\n".join(textwrap.wrap(label, width=70))
 
 
 def _clean_name(name: str | None) -> str | None:

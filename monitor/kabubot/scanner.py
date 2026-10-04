@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
-from .charts import ChartRenderer
+from .charts import ChartRenderer, _safe_name
 from .codex_client import CodexClient
 from .config import Settings
 from .grok_x_skill import GrokXSkill
-from .events import EventMonitor
+from .events import EventMonitor, MarketEvent, event_label
 from .ml_signal import enrich_anomaly_scores
 from .notifier import Notifier
 from .storage import ReportStore
@@ -42,9 +43,10 @@ class Scanner:
             settings.discord_allowed_channel_id if discord_private_ready else None,
         )
         self.store = ReportStore(settings.data_dir)
+        self.event_store = ReportStore(settings.data_dir / "events" / "analysis")
         self.watch = WatchStore(settings.data_dir, settings.sector_query, [])
         self.charts = ChartRenderer(settings.data_dir)
-        self.events = EventMonitor(settings, self.watch, self.notifier)
+        self.events = EventMonitor(settings, self.watch, self.notifier, self.event_analysis)
 
     async def scan(
         self,
@@ -52,6 +54,7 @@ class Scanner:
         symbols: list[str] | None = None,
         max_candidates: int | None = None,
         notify: bool = True,
+        event_context: list[MarketEvent] | None = None,
     ) -> ScanReport:
         watch_state = self.watch.get()
         sector = sector_query or watch_state.sector_query or self.settings.sector_query
@@ -60,6 +63,8 @@ class Scanner:
             requested_symbols = watch_state.symbols
         watch_symbols = _unique_symbols(watch_state.symbols)
         limit = max_candidates or self.settings.max_candidates
+        if event_context:
+            limit = max(limit, len(requested_symbols))
         logger.info("starting scan sector=%s symbols=%s", sector, requested_symbols)
 
         if requested_symbols:
@@ -73,8 +78,14 @@ class Scanner:
                 price_signals = _merge_signals(price_signals, watch_price_signals)
         logger.info("yfinance complete sector=%s candidates=%d warnings=%d", sector, len(price_signals), len(yf_warnings))
 
+        if event_context:
+            for signal in price_signals:
+                related = [event for event in event_context if event.symbol == signal.symbol]
+                signal.name = next((event.name for event in related if event.name), signal.name)
+                signal.notes.extend(event_label(event) for event in related)
         scored = _mark_watch_signals(enrich_anomaly_scores(price_signals), watch_symbols)
-        search_candidates, extreme_excluded = _exclude_extreme_one_day_drops(scored)
+        # Event reports cover every calendar company, even extreme movers.
+        search_candidates, extreme_excluded = (scored, []) if event_context else _exclude_extreme_one_day_drops(scored)
         logger.info(
             "ml scoring complete sector=%s candidates=%d extreme_excluded=%d",
             sector,
@@ -95,11 +106,13 @@ class Scanner:
         delivery_limit = max(ANALYSIS_SIGNAL_LIMIT, len(watch_symbols), len(requested_symbols))
         report_signals = _compose_report_signals(boosted, watch_symbols, delivery_limit)
         logger.info("codex summary start sector=%s boosted=%d", sector, len(boosted))
+        summary_options = {"event_context": [e.model_dump(mode="json") for e in event_context]} if event_context else {}
         summary, generated_by_codex = await self.codex.summarize(
             sector,
             report_signals[:ANALYSIS_SIGNAL_LIMIT],
             x_narrative,
             self.settings.report_language,
+            **summary_options,
         )
         logger.info("codex summary complete sector=%s generated=%s", sector, generated_by_codex)
 
@@ -120,6 +133,7 @@ class Scanner:
                 "report_language": self.settings.report_language,
                 "watch": watch_state.model_dump(mode="json"),
                 "registered_watch_symbols": watch_symbols,
+                "events": [e.model_dump(mode="json") for e in event_context or []],
                 "extreme_one_day_drop_exclusion_pct": EXTREME_ONE_DAY_DROP_EXCLUSION_PCT,
                 "extreme_one_day_drop_excluded": [
                     {
@@ -131,12 +145,33 @@ class Scanner:
                 ],
             },
         )
-        self.store.save(report)
+        (self.event_store if event_context else self.store).save(report)
         if notify:
             chart_paths = await asyncio.to_thread(self.charts.render_report_charts, report)
             await self.notifier.send(report, chart_paths=chart_paths)
         logger.info("scan complete report=%s codex=%s", report.id, generated_by_codex)
         return report
+
+    async def event_analysis(self, snapshot: dict, events: list[MarketEvent]) -> tuple[str, list[Path]]:
+        symbols = list(dict.fromkeys(event.symbol for event in events))
+        if not symbols:
+            return "この7日間に取得済みのイベントはありません。", []
+        report = await self.scan(sector_query=snapshot["sector_query"], symbols=symbols,
+                                 notify=False, event_context=events)
+        paths = await asyncio.to_thread(self.charts.render_report_charts, report)
+        lines = ["KabuBot イベント関連銘柄の分析", "", *(event_label(event) for event in events),
+                 "", report.codex_summary]
+        if report.x_narrative.citations:
+            lines.extend(["", "X/Social 出典", *report.x_narrative.citations])
+        if report.warnings:
+            lines.extend(["", "取得状況: " + "; ".join(report.warnings)])
+        rendered = {path.stem for path in paths}
+        missing = [symbol for symbol in symbols if _safe_name(symbol) not in rendered]
+        if missing:
+            names = {event.symbol: event.name or "社名未取得" for event in events}
+            lines.extend(["", "株価推移画像を取得できませんでした: " + ", ".join(
+                f"{names[symbol]} ({symbol})" for symbol in missing)])
+        return "\n".join(lines), paths
 
     async def quote(self, symbols: list[str]) -> list[PriceSignal]:
         return enrich_anomaly_scores(await asyncio.to_thread(self.yfinance.quote_symbols, symbols))

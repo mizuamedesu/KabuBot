@@ -4,7 +4,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && apt-get install -y --no-install-recommends ca-certificates curl fonts-noto-cjk \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -18,4 +18,3 @@ ENV PORT=8790
 EXPOSE 8790
 
 CMD ["python", "-m", "kabubot.main"]
-

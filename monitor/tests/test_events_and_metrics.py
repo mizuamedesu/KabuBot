@@ -9,7 +9,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from kabubot.events import EventMonitor, MarketEvent, event_symbols, parse_calendar, render_calendar
+from kabubot.events import (EventMonitor, MarketEvent, analysis_batches, event_symbols,
+                            parse_calendar, render_calendar, upcoming_events)
 from kabubot.ml_signal import enrich_anomaly_scores
 from kabubot.types import PriceSignal, WatchState
 from kabubot.yfinance_skill import _return_zscore
@@ -58,6 +59,7 @@ def test_sector_failure_and_limit_are_visible(monkeypatch):
 class Delivery:
     def __init__(self):
         self.messages = []
+        self.paths = []
         self.result = True
         self.fail = False
 
@@ -65,6 +67,7 @@ class Delivery:
         if self.fail:
             raise RuntimeError("delivery failed")
         self.messages.append(text)
+        self.paths.append(paths)
         return self.result
 
 
@@ -88,13 +91,16 @@ def test_alerts_cross_month_catch_up_and_survive_restart(tmp_path):
     assert "6日前" in delivery.messages[0]
     assert "UNWATCHED" in delivery.messages[0]
     restarted = make_monitor(tmp_path, delivery)
-    asyncio.run(restarted._notify(data, date(2026, 9, 26)))
+    asyncio.run(restarted._notify(data, date(2026, 9, 25)))
     assert len(delivery.messages) == 1
+    asyncio.run(restarted._notify(data, date(2026, 9, 26)))
+    assert len(delivery.messages) == 2  # Rolling seven-day window advances daily.
+    assert "日前" not in delivery.messages[-1]  # The same reminder is not repeated.
     asyncio.run(restarted._notify(data, date(2026, 9, 28)))
     assert "3日前" in delivery.messages[-1]
     asyncio.run(restarted._notify(data, date(2026, 9, 30)))
     assert "1日前" in delivery.messages[-1]
-    assert len(delivery.messages) == 3
+    assert len(delivery.messages) == 4
 
 
 def test_failed_and_unconfigured_delivery_is_not_marked_sent(tmp_path):
@@ -136,10 +142,80 @@ def test_refresh_keeps_month_history_but_removes_replaced_future_dates(tmp_path,
     items = [MarketEvent(symbol="TEST", kind="earnings", day=date(2026, 9, 10)),
              MarketEvent(symbol="TEST", kind="ex_dividend", day=date(2026, 9, 20))]
     monkeypatch.setattr("kabubot.events.fetch_calendar", lambda symbol: (items, None))
+    monkeypatch.setattr("kabubot.events.fetch_company_name", lambda symbol: "Test Company Full Name")
     monitor._collect(date(2026, 9, 9))
     items = [MarketEvent(symbol="TEST", kind="ex_dividend", day=date(2026, 9, 22))]
     result = monitor._collect(date(2026, 9, 18))
     assert [e["day"] for e in result["events"]] == ["2026-09-10", "2026-09-22"]
+    assert result["events"][-1]["name"] == "Test Company Full Name"
+    assert (result["range_start"], result["range_end"]) == ("2026-09-18", "2026-09-24")
+
+
+def test_week_boundaries_and_estimated_window_across_year():
+    today = date(2026, 12, 29)
+    events = [MarketEvent(symbol="PAST", kind="earnings", day=today - timedelta(days=1)),
+              MarketEvent(symbol="WINDOW", kind="earnings", day=today - timedelta(days=2), end_day=today),
+              MarketEvent(symbol="TODAY", kind="dividend_payment", day=today),
+              MarketEvent(symbol="LAST", kind="ex_dividend", day=today + timedelta(days=6)),
+              MarketEvent(symbol="OUTSIDE", kind="earnings", day=today + timedelta(days=7))]
+    assert [e.symbol for e in upcoming_events(snapshot(events), today)] == ["WINDOW", "TODAY", "LAST"]
+
+
+def test_analysis_retries_failed_batch_without_resending_completed_batches(tmp_path):
+    delivery = Delivery()
+    monitor = make_monitor(tmp_path, delivery)
+    today = date(2026, 9, 18)
+    events = [MarketEvent(symbol=f"S{i}", name=f"Company Full Name {i}", kind="earnings", day=today)
+              for i in range(13)]
+    # Two event types for one company still produce one price analysis/chart.
+    events.append(MarketEvent(symbol="S0", kind="ex_dividend", day=today))
+    calls, fail = [], True
+
+    async def analyze(data, batch):
+        symbols = list(dict.fromkeys(e.symbol for e in batch))
+        calls.append(symbols)
+        if symbols == ["S10", "S11", "S12"] and fail:
+            raise RuntimeError("analysis temporarily unavailable")
+        return "analysis: " + ",".join(symbols), [tmp_path / f"{s}.png" for s in symbols]
+
+    monitor.analyze = analyze
+    with pytest.raises(RuntimeError):
+        asyncio.run(monitor._notify(snapshot(events), today))
+    assert len(delivery.messages) == 2  # Calendar and the first analysis batch.
+    fail = False
+    restarted = make_monitor(tmp_path, delivery)
+    restarted.analyze = analyze
+    asyncio.run(restarted._notify(snapshot(events), today))
+    asyncio.run(restarted._notify(snapshot(events), today))
+    assert calls == [[f"S{i}" for i in range(10)], ["S10", "S11", "S12"], ["S10", "S11", "S12"]]
+    assert len(delivery.messages) == 3
+    assert sum(len(paths) for paths in delivery.paths[1:]) == 13
+
+
+def test_calendar_full_labels_seven_days_and_pagination(tmp_path, monkeypatch):
+    from matplotlib.figure import Figure
+    captured = []
+    original_save = Figure.savefig
+
+    def capture(fig, *args, **kwargs):
+        captured.append([text.get_text() for ax in fig.axes for text in ax.texts])
+        return original_save(fig, *args, **kwargs)
+
+    monkeypatch.setattr(Figure, "savefig", capture)
+    today = date(2026, 12, 29)
+    full_name = "Very Long International Software and Infrastructure Corporation Limited " * 2
+    events = [MarketEvent(symbol=f"S{i}", name=f"{full_name}{i}", kind="earnings", day=today)
+              for i in range(45)]
+    events.append(MarketEvent(symbol="OUTSIDE", name="Must Not Appear", kind="earnings", day=today + timedelta(days=7)))
+    paths = render_calendar(events, today, tmp_path / "calendar.png", 46, 0)
+    assert len(paths) > 1 and all(path.exists() for path in paths)
+    all_text = "\n".join(text for page in captured for text in page)
+    assert "Must Not Appear" not in all_text
+    assert "決算予定" in all_text
+    assert full_name + "44 (S44)" in all_text.replace("\n", "")
+    for label in ["12/29", "12/30", "12/31", "01/01", "01/02", "01/03", "01/04"]:
+        assert label in all_text
+    assert "01/05" not in all_text
 
 
 def test_total_return_z_uses_previous_observations_and_adjusts_dividends():

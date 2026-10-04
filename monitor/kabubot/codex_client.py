@@ -35,8 +35,9 @@ class CodexClient:
         signals: list[PriceSignal],
         x_narrative: GrokNarrative,
         language: str,
+        event_context: list[dict] | None = None,
     ) -> tuple[str, bool]:
-        prompt = _summary_prompt(sector_query, signals, x_narrative, language)
+        prompt = _summary_prompt(sector_query, signals, x_narrative, language, event_context)
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(1200.0)) as client:
                 response = await client.post(
@@ -50,7 +51,7 @@ class CodexClient:
                     return text, True
         except Exception as error:
             logger.warning("codex summary failed: %s", error)
-        return fallback_summary(sector_query, signals, x_narrative), False
+        return fallback_summary(sector_query, signals, x_narrative, event_context), False
 
     async def chat(self, message: str, watch: WatchState, latest_report: str | None) -> str | None:
         prompt = _chat_prompt(message, watch, latest_report)
@@ -101,11 +102,13 @@ def _summary_prompt(
     signals: list[PriceSignal],
     x_narrative: GrokNarrative,
     language: str,
+    event_context: list[dict] | None = None,
 ) -> str:
     payload = {
         "sector_query": sector_query,
         "price_signals": [signal.model_dump() for signal in signals],
         "x_narrative": x_narrative.model_dump(),
+        "upcoming_events": event_context or [],
     }
     output_hint = "Japanese" if language == "ja" else language
     return (
@@ -121,7 +124,12 @@ def _summary_prompt(
         "`ex_dividend_adjusted_day_change_pct`; do not describe the mechanical dividend amount as a crash.\n"
         "Signals whose notes include `registered watch` are user-registered daily watch stocks. "
         "Always include a concise movement summary for those companies, even when they are less anomalous than the theme scan.\n"
-        f"Write the market-open summary in {output_hint}.\n"
+        "When upcoming_events is nonempty, this is an event preview, not a market-open scan. "
+        "Cover EVERY supplied company, including ones with little price movement. For each, connect the scheduled "
+        "earnings/ex-dividend/payment date (or estimated window) to its price trend, supplied valuation/fundamentals, "
+        "X evidence and concrete points to watch. Missing data must be stated; never invent prices, earnings or dates. "
+        "Use full company names without abbreviating them.\n"
+        f"Write the {'event preview' if event_context else 'market-open summary'} in {output_hint}.\n"
         "Return valid Discord Markdown. Use short headings, bullet lists, and bold company labels. "
         "Do not use Markdown tables, HTML, code fences, or raw JSON in the answer.\n"
         "Format:\n"
@@ -191,10 +199,11 @@ def _resolve_watch_symbols_prompt(
     )
 
 
-def fallback_summary(sector_query: str, signals: list[PriceSignal], x_narrative: GrokNarrative) -> str:
+def fallback_summary(sector_query: str, signals: list[PriceSignal], x_narrative: GrokNarrative,
+                     event_context: list[dict] | None = None) -> str:
     lines = [
         "## Headline",
-        f"{sector_query}: 市場開始時の急落・異常値スキャン",
+        f"{sector_query}: " + ("イベント関連銘柄の分析" if event_context else "市場開始時の急落・異常値スキャン"),
         "",
         "## Hot Companies",
     ]

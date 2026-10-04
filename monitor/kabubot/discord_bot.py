@@ -9,6 +9,7 @@ import discord
 from discord import app_commands
 
 from .config import Settings
+from .events import analysis_batches, calendar_caption, upcoming_events
 from .scanner import Scanner
 
 logger = logging.getLogger(__name__)
@@ -114,25 +115,32 @@ class KabuDiscordBot(discord.Client):
         async def chat_command(interaction: discord.Interaction, message: str) -> None:
             await self._handle_interaction(interaction, f"chat {message}")
 
-        @app_commands.command(name="calendar", description="選択テーマとwatchの今月の決算・配当カレンダー")
+        @app_commands.command(name="calendar", description="今後7日間の決算・配当カレンダーと関連銘柄の分析・株価画像")
         async def calendar_command(interaction: discord.Interaction) -> None:
             if not self._interaction_allowed(interaction):
                 await interaction.response.send_message("このサーバー/チャンネル/ユーザーでは使えません。", ephemeral=True)
                 return
             await interaction.response.defer(thinking=True)
             # A sector-wide first refresh may outlive Discord's interaction token.
-            await interaction.followup.send("今月のイベント日程を取得しています。初回は数分かかる場合があります。")
+            await interaction.followup.send("今後7日間のイベント日程を取得し、関連銘柄の分析と株価画像を送ります。初回は数分かかる場合があります。")
             destination = interaction.channel or interaction.followup
             try:
                 snapshot = await self.scanner.events.refresh()
-                await destination.send(
-                    f"今月の予定: {len(snapshot['symbols'])} 銘柄 / 未取得・部分取得 {len(snapshot['warnings'])} 件。"
-                    " E=決算予定、X=権利落ち、D=配当支払、~=予定期間。日程は変更される場合があります。",
-                    file=discord.File(self.scanner.events.root / "calendar.png"),
-                )
+                today = self.scanner.events.today()
+                await destination.send(calendar_caption(snapshot, today))
+                for path in self.scanner.events.calendar_paths(snapshot):
+                    image = discord.File(path)
+                    try:
+                        await destination.send(file=image)
+                    finally:
+                        image.close()
+                for batch in analysis_batches(upcoming_events(snapshot, today)):
+                    text, paths = await self.scanner.event_analysis(snapshot, batch)
+                    await _send_chunks(destination, text)
+                    await _send_chart_files(destination, paths)
             except Exception:
                 logger.exception("calendar command failed")
-                await destination.send("イベントカレンダーの取得に失敗しました。")
+                await destination.send("イベントカレンダーまたは関連銘柄の分析の取得に失敗しました。")
 
         for command in [calendar_command, help_command, auth_command, watch_command, scan_command, quote_command, report_command, chat_command]:
             self.tree.add_command(command, guild=guild)
@@ -720,7 +728,7 @@ def _help_text() -> str:
         "- `/scan`",
         "- `/scan sector:ソフトウェア`",
         "- `/quote symbols:MSFT CRM NOW`",
-        "- `/calendar` 今月の決算・権利落ち・配当支払カレンダー",
+        "- `/calendar` 今後7日間の決算・配当予定と関連銘柄の分析・株価画像",
         "- `/report`",
         "- `/chat message:いま何を見てる？`",
     ])
