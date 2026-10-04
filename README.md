@@ -79,9 +79,9 @@ GHCRパッケージが非公開の場合は、事前に`read:packages`権限の�
 
 ## HeteroCloudへの配置
 
-Flashへ配置済みで、2026-10-04にmonitorのイメージ更新を要求しました。適用した設定は`deploy/heterocloud/runner.json`と`deploy/heterocloud/monitor.json`に保存しています。イメージはdigestで固定しています。monitorの更新対象は7日間カレンダー・関連銘柄分析に対応した`6ae6150961f9fb17dcaac991ca745b42afafdcb1`、runnerは認証確認を修正した`11ad87a2184f3696cab65f08151b3127a88a7193`のビルドです。
+2026-10-04にFlashのmonitorを更新し、起動とDiscordへの通知を確認しました。適用した設定は`deploy/heterocloud/runner.json`と`deploy/heterocloud/monitor.json`に保存しています。イメージはdigestで固定しています。monitorは7日間カレンダー・関連銘柄分析に対応した`6ae6150961f9fb17dcaac991ca745b42afafdcb1`、runnerは認証確認を修正した`11ad87a2184f3696cab65f08151b3127a88a7193`のビルドです。
 
-2026-10-04 16:26 JST時点では、更新要求は受理されていますが、Flashのコンテナ操作APIが`503 flash_provider_unavailable`を返し、monitorは`updating`のままです。新版の起動とDiscordへの通知は確認待ちです。
+2026-10-04の稼働確認ではmonitorはgeneration 4で`ready`です。10月4日〜10日のカレンダーに18銘柄の社名を表示し、全18銘柄のGrok X Search・Codex分析と株価推移画像をDiscordへ送信済みです。毎朝07:00のイベント取得と通常の株価スキャンのcronも有効です。
 
 - Bot本体: `01a0ff77-c342-7a80-b596-85bb3c792c89`（1 vCPU / 1536 MiB / ディスク5 GiB）
 - Codex runner: `01a0ff76-0c51-7752-b251-792c215ff47d`（0.5 vCPU / 768 MiB / ディスク5 GiB）
