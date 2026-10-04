@@ -3,7 +3,7 @@
   "name": "kabubot-monitor",
   "spec": {
     "region": "heteronet-global",
-    "image": "ghcr.io/mizuamedesu/kabubot-monitor@sha256:782a0ce8db5a06b3742f9707b92cb007752aed911f136f539d1ff14934e9830b",
+    "image": "ghcr.io/mizuamedesu/kabubot-monitor@sha256:a639ce0691346e6976f53407f991e20c305b9b36a986cab127ff3de965f2ae47",
     "replicas": 1,
     "cpu_millis": 1000,
     "memory_mib": 1536,
@@ -62,7 +62,7 @@
     "metadata": {
       "application": "kabubot",
       "component": "monitor",
-      "source_commit": "ec151c920a57244e83991e05d50ff4749b4b35c6"
+      "source_commit": "6ae6150961f9fb17dcaac991ca745b42afafdcb1"
     },
     "secret_env": {
       "DISCORD_BOT_TOKEN": "discord-bot-token",
